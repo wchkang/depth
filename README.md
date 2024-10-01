@@ -14,9 +14,9 @@ Download the pretrained model in the link.
 
 | Model                   | Acc@1 | FLOPs  |                                                                                                 |
 | ----------------------- | ----- | ------ | ----------------------------------------------------------------------------------------------- |
-| ResNet50-ADN (FFFF)     | 77.6% | 4.11G  | [Donwload](https://drive.google.com/file/d/1thbJDkDYhhM7ZI3LY8d9dZ4TWSbYMT0b/view?usp=sharing)  |
+| ResNet50-ADN (FFFF)     | 77.6% | 4.11G  | [Download](https://drive.google.com/file/d/1thbJDkDYhhM7ZI3LY8d9dZ4TWSbYMT0b/view?usp=sharing)  |
 | ResNet50-ADN (TTTT)     | 76.1% | 2.58G  |                                                                                                 |
-| MobileNetV2-ADN (FFFFF) | 72.5% | 0.32G  | [Donwload](https://drive.google.com/file/d/1bft5SECYXOFjEhPSkAp2Z9d1U-7w2Mnz/view?usp=sharing) |
+| MobileNetV2-ADN (FFFFF) | 72.5% | 0.32G  | [Download](https://drive.google.com/file/d/1bft5SECYXOFjEhPSkAp2Z9d1U-7w2Mnz/view?usp=sharing) |
 | MobileNetV2-ADN (TTTTT) | 70.6% | 0.22G  |                                                                                                 |
 | ViT-b/16-ADN (FFFF)     | 81.4% | 17.58G | [Download](https://drive.google.com/file/d/1DlHNgjDCKJOWWFSuQIjClA5Ewbc6Jy3u/view?usp=sharing)  |
 | ViT-b/16-ADN (TTTT)     | 80.6% | 11.76G |                                                                                                 |
