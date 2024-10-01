@@ -12,7 +12,7 @@ This is the official implementation of [Adaptive Depth Networks with Skippable S
 Performance on ILSVRC-2012 validation set. 
 Download the pretrained model in the link.
 
-| Model                   | Acc@1 | FLOPs  |                                                                                                 |
+| Model                   | Acc@1 | FLOPs  | Pretrained Weights                                                                                                |
 | ----------------------- | ----- | ------ | ----------------------------------------------------------------------------------------------- |
 | ResNet50-ADN (FFFF)     | 77.6% | 4.11G  | [Download](https://drive.google.com/file/d/1thbJDkDYhhM7ZI3LY8d9dZ4TWSbYMT0b/view?usp=sharing)  |
 | ResNet50-ADN (TTTT)     | 76.1% | 2.58G  |                                                                                                 |
