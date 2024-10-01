@@ -1,0 +1,10 @@
+checkpoint/
+pretrained/
+pretrained*/
+logs/
+exp*/
+exp-*.ipynb
+__pycache__/
+*.swp
+*.pdf
+log.*
