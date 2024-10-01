@@ -6,6 +6,7 @@ This is the official implementation of [Adaptive Depth Networks with Skippable S
 * A single network is trained to have multiple skippable layers.
 * At test time, the network's depth can be scaled instantly without any additional cost. 
 * Sub-networks of different depths outperform counterpart individual networks.
+* Applicable both to CNNs and Transforms (ViT, Swin, etc.)! 
 
 ## Model Zoo
 
