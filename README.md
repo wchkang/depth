@@ -3,26 +3,31 @@
 This is the official implementation of [Adaptive Depth Networks with Skippable Sub-Paths (NeurIPS 2024)](https://arxiv.org/abs/2312.16392). 
 
 ![fig1-small](./figures/fig1-small.png)
-* A single network is trained to have multiple skippable layers.
-* At test time, the network's depth can be scaled instantly without any additional cost. 
+* **A single network** is trained to have multiple skippable layers.
+* At test time, the network's **depth can be scaled instantly** without any additional cost. 
 * Sub-networks of different depths outperform counterpart individual networks.
-* Applicable both to CNNs and Transforms (ViT, Swin, etc.)! 
+* Applicable both to **CNNs** and **Transforms** (ViT, Swin, etc.)
 
 ## Model Zoo
 
-Performance on ILSVRC-2012 validation set. 
-Download the pretrained model in the link.
-
-| Model                   | Acc@1 | FLOPs  | Pretrained Weights                                                                                                |
-| ----------------------- | ----- | ------ | ----------------------------------------------------------------------------------------------- |
-| ResNet50-ADN (FFFF)     | 77.6% | 4.11G  | [Download](https://drive.google.com/file/d/1thbJDkDYhhM7ZI3LY8d9dZ4TWSbYMT0b/view?usp=sharing)  |
-| ResNet50-ADN (TTTT)     | 76.1% | 2.58G  |                                                                                                 |
-| MobileNetV2-ADN (FFFFF) | 72.5% | 0.32G  | [Download](https://drive.google.com/file/d/1bft5SECYXOFjEhPSkAp2Z9d1U-7w2Mnz/view?usp=sharing) |
-| MobileNetV2-ADN (TTTTT) | 70.6% | 0.22G  |                                                                                                 |
-| ViT-b/16-ADN (FFFF)     | 81.4% | 17.58G | [Download](https://drive.google.com/file/d/1DlHNgjDCKJOWWFSuQIjClA5Ewbc6Jy3u/view?usp=sharing)  |
-| ViT-b/16-ADN (TTTT)     | 80.6% | 11.76G |                                                                                                 |
-| Swin-t-ADN (FFFF)       | 81.6% | 4.49G  | [Download](https://drive.google.com/file/d/10twk67rVBAoKFKZSkgsXEzx1RABX73kF/view?usp=sharing)  |
-| Swin-t-ADN (TTTT)       | 78.0% | 2.34G  |                                                                                                 |
+Performance on ILSVRC-2012 validation set.
+| Model          |*--skip-cfg* | Acc@1(%) | GFLOPs  | Pretrained Weights                                                   |
+|:--------------:|:-----------:| -----:| -----:| ----------------------------------------------------------------------------------------------- |
+| ResNet50-ADN   |FFFF         | 77.6 | 4.11  | [Download](https://drive.google.com/file/d/1thbJDkDYhhM7ZI3LY8d9dZ4TWSbYMT0b/view?usp=sharing)  |
+|                |TFFF         | 77.1 | 3.90  |                                                                                                 |
+|                |TTFF         | 76.5 | 3.46  |                                                                                                 |
+|                |TTTT         | 76.1 | 2.58  |                                                                                                 |
+| MobileNetV2-ADN|FFFFF        | 72.5 | 0.32  | [Download](https://drive.google.com/file/d/1bft5SECYXOFjEhPSkAp2Z9d1U-7w2Mnz/view?usp=sharing) |
+|                |TTTTT        | 70.6 | 0.22  |                                                                                                 |
+| ViT-b/16-ADN   |FFFF         | 81.4 | 17.58 | [Download](https://drive.google.com/file/d/1DlHNgjDCKJOWWFSuQIjClA5Ewbc6Jy3u/view?usp=sharing)  |
+|                |FFFT         | 81.2 | 16.20 |                                                                                                 |
+|                |TTFF         | 80.9 | 14.67 |                                                                                                 |
+|                |TTFT         | 80.7 | 13.21 |                                                                                                 |
+|                |TTTT         | 80.6 | 11.76 |                                                                                                 |
+| Swin-T-ADN     |FFFF         | 81.6 | 4.49  | [Download](https://drive.google.com/file/d/10twk67rVBAoKFKZSkgsXEzx1RABX73kF/view?usp=sharing)  |
+|                |TFFF         | 80.8 | 4.11  |                                                                                                 |
+|                |TTFF         | 80.0 | 3.75  |                                                                                                 |
+|                |TTTT         | 78.0 | 2.34  |                                                                                                 |
 
 ## Training and Evaluation on ImageNet
 <details>
