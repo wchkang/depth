@@ -9,6 +9,9 @@ This is the official implementation of [Adaptive Depth Networks with Skippable S
 * Applicable both to **CNNs** and **Transforms** (ViT, Swin, etc.)
 
 ## Model Zoo
+The depth, or FLOPs, of the following networks can be controlled using *--skip-cfg* option.
+
+The layers in the *n*-th stage is skipped if *n*-th boolean value is *True*. 
 
 Performance on ILSVRC-2012 validation set.
 | Model          |*--skip-cfg* | Acc@1(%) | GFLOPs  | Pretrained Weights                                                   |
