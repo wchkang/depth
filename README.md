@@ -5,11 +5,11 @@ This is the official implementation of [Adaptive Depth Networks with Skippable S
 ![fig1-small](./figures/fig1-small.png)
 * **A single network** is trained to have multiple skippable layers.
 * At test time, the network's **depth can be scaled instantly** without any additional cost. 
-* Sub-networks of different depths outperform counterpart individual networks.
-* Applicable both to **CNNs** and **Transforms** (ViT, Swin, etc.)
+* **Depth-scaled networks outperform** individually trained networks!
+* Applicable both to **CNNs** and **Transformers** (ViT, Swin, etc.)
 
 ## Model Zoo
-The depth, or FLOPs, of the following networks can be controlled using *--skip-cfg* option.
+The depth, or FLOPs, can be controlled instantly using *--skip-cfg* option.
 
 The layers in the *n*-th stage is skipped if *n*-th boolean value is *True*. 
 
