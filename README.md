@@ -4,8 +4,8 @@ This is the official implementation of [Adaptive Depth Networks with Skippable S
 
 ![fig1-small](./figures/fig1-small.png)
 * **A single network** is trained to have multiple skippable layers.
-* At test time, the network's **depth can be scaled instantly** without any additional cost. 
-* **Depth-scaled networks outperform** individually trained networks!
+* At test time, choose **your network depth!** The network's depth can be scaled instantly at no extra cost.  
+* **Depth-scaled networks outperform** individually trained networks.
 * Applicable both to **CNNs** and **Transformers** (ViT, Swin, etc.)
 
 ## Model Zoo
@@ -14,23 +14,23 @@ The depth, or FLOPs, can be controlled instantly using *--skip-cfg* option.
 The layers in the *n*-th stage is skipped if *n*-th boolean value is *True*. 
 
 Performance on ILSVRC-2012 validation set.
-| Model          |*--skip-cfg* | Acc@1(%) | GFLOPs  | Pretrained Weights                                                   |
-|:--------------:|:-----------:| -----:| -----:| ----------------------------------------------------------------------------------------------- |
-| ResNet50-ADN   |FFFF         | 77.6 | 4.11  | [Download](https://drive.google.com/file/d/1thbJDkDYhhM7ZI3LY8d9dZ4TWSbYMT0b/view?usp=sharing)  |
-|                |TFFF         | 77.1 | 3.90  |                                                                                                 |
-|                |TTFF         | 76.5 | 3.46  |                                                                                                 |
-|                |TTTT         | 76.1 | 2.58  |                                                                                                 |
-| MobileNetV2-ADN|FFFFF        | 72.5 | 0.32  | [Download](https://drive.google.com/file/d/1bft5SECYXOFjEhPSkAp2Z9d1U-7w2Mnz/view?usp=sharing) |
-|                |TTTTT        | 70.6 | 0.22  |                                                                                                 |
-| ViT-b/16-ADN   |FFFF         | 81.4 | 17.58 | [Download](https://drive.google.com/file/d/1DlHNgjDCKJOWWFSuQIjClA5Ewbc6Jy3u/view?usp=sharing)  |
-|                |FFFT         | 81.2 | 16.20 |                                                                                                 |
-|                |TTFF         | 80.9 | 14.67 |                                                                                                 |
-|                |TTFT         | 80.7 | 13.21 |                                                                                                 |
-|                |TTTT         | 80.6 | 11.76 |                                                                                                 |
-| Swin-T-ADN     |FFFF         | 81.6 | 4.49  | [Download](https://drive.google.com/file/d/10twk67rVBAoKFKZSkgsXEzx1RABX73kF/view?usp=sharing)  |
-|                |TFFF         | 80.8 | 4.11  |                                                                                                 |
-|                |TTFF         | 80.0 | 3.75  |                                                                                                 |
-|                |TTTT         | 78.0 | 2.34  |                                                                                                 |
+| Model          |*--skip-cfg* | GFLOPs  | Acc@1(%) |  Pretrained Weights                                                   |
+|:--------------:|:-----------:|-----:|:-----|  ----------------------------------------------------------------------------------------------- |
+| ResNet50-ADN   |FFFF         | 4.11  |77.6 (+0.9 %p) |  [Download](https://drive.google.com/file/d/1thbJDkDYhhM7ZI3LY8d9dZ4TWSbYMT0b/view?usp=sharing)  |
+|                |TFFF         | 3.90  |77.1 |                                                                                                  |
+|                |TTFF         | 3.46  |76.5 |                                                                                                  |
+|                |TTTT         | 2.58  |76.1 (+1.1 %p)|                                                                                                  |
+| MobileNetV2-ADN|FFFFF        | 0.32  |72.5 (+0.4 %p)|  [Download](https://drive.google.com/file/d/1bft5SECYXOFjEhPSkAp2Z9d1U-7w2Mnz/view?usp=sharing) |
+|                |TTTTT        | 0.22  |70.6 (+0.4 %p)|                                                                                                  |
+| ViT-b/16-ADN   |FFFF         | 17.58 |81.4 (+0.3 %p) |  [Download](https://drive.google.com/file/d/1DlHNgjDCKJOWWFSuQIjClA5Ewbc6Jy3u/view?usp=sharing)  |
+|                |FFFT         | 16.20 |81.2 |                                                                                                  |
+|                |TTFF         | 14.67 |80.9 |                                                                                                  |
+|                |TTFT         | 13.21 |80.7 |                                                                                                  |
+|                |TTTT         | 11.76 |80.6 (+1.9 %p)|                                                                                                  |
+| Swin-T-ADN     |FFFF         | 4.49  |81.6 (+0.1 %p) |  [Download](https://drive.google.com/file/d/10twk67rVBAoKFKZSkgsXEzx1RABX73kF/view?usp=sharing)  |
+|                |TFFF         | 4.11  |80.8 |                                                                                                  |
+|                |TTFF         | 3.75  |80.0 |                                                                                                  |
+|                |TTTT         | 2.34  |78.0 (0.6 %p)|                                                                                                  |
 
 ## Training and Evaluation on ImageNet
 <details>
