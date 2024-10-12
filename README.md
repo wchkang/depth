@@ -3,8 +3,8 @@
 This is the official implementation of [Adaptive Depth Networks with Skippable Sub-Paths (NeurIPS 2024)](https://arxiv.org/abs/2312.16392). 
 
 ![fig1-small](./figures/fig1-small.png)
-* **A single network** is trained to have multiple skippable layers.
-* At test time, choose **your network depth!** The network's depth can be scaled instantly at no extra cost.  
+* **A single network is trained** to have multiple skippable layers.
+* At test time, **choose your network depth!** The network's depth can be scaled instantly at no extra cost.  
 * **Depth-scaled networks outperform** individually trained networks.
 * Applicable both to **CNNs** and **Transformers** (ViT, Swin, etc.)
 
