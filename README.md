@@ -27,7 +27,7 @@ Performance on ILSVRC-2012 validation set.
 |                |TFFF         | 3.90  |80.4 |                                                                                                  |
 |                |TTFF         | 3.46  |79.9 |                                                                                                  |
 |                |TTTF         | 2.80  |78.7 |                                                                                                  |
-|                |TTTT         | 2.58  |78.4)|                                                                                                  |
+|                |TTTT         | 2.58  |78.4|                                                                                                  |
 | MobileNetV2-ADN|FFFFF        | 0.32  |72.5 (+0.4 %p)|  [Download](https://drive.google.com/file/d/1bft5SECYXOFjEhPSkAp2Z9d1U-7w2Mnz/view?usp=sharing) |
 |                |TTTTT        | 0.22  |70.6 (+0.4 %p)|                                                                                                  |
 | ViT-b/16-ADN   |FFFF         | 17.58 |81.4 (+0.3 %p) |  [Download](https://drive.google.com/file/d/1DlHNgjDCKJOWWFSuQIjClA5Ewbc6Jy3u/view?usp=sharing)  |
