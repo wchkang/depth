@@ -74,7 +74,10 @@ torchrun --nproc_per_node=4 train_adn.py --model resnet50 --batch-size 64 --lr-s
 
 To train ResNet50-ADN(v2) on ILSVRC2012, run this command:
 (Add '--fpn' to include intermediate features for self-distillation)
+
+```
 torchrun --nproc_per_node=4 train_adn.py --model resnet50 --batch-size 256 --lr 0.5 --lr-scheduler cosineannealinglr --lr-warmup-epochs 5 --lr-warmup-method linear --auto-augment ta_wide --epochs 600 --random-erase 0.1 --weight-decay 0.00002 --norm-weight-decay 0.0 --mixup-alpha 0.2 --cutmix-alpha 1.0 --train-crop-size 176 --model-ema --val-resize-size 232 --ra-sampler --ra-reps=4 --bias-weight-decay 0 --amp --subpath-temp 1.0 --data-path <ILSVRC2012 data path>
+```
 
 To train Mobilenet-V2-ADN, run:
 
