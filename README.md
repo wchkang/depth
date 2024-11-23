@@ -23,6 +23,11 @@ Performance on ILSVRC-2012 validation set.
 |                |TFFF         | 3.90  |77.1 |                                                                                                  |
 |                |TTFF         | 3.46  |76.5 |                                                                                                  |
 |                |TTTT         | 2.58  |76.1 (+1.1 %p)|                                                                                                  |
+| ResNet50-ADN(v2)*   |FFFF         | 4.11  |80.5 |  [Download](https://drive.google.com/file/d/15g7GNB9VkTARW-yqyiHOyglfeOaGf15p/view?usp=drive_link)  |
+|                |TFFF         | 3.90  |80.4 |                                                                                                  |
+|                |TTFF         | 3.46  |79.9 |                                                                                                  |
+|                |TTTF         | 2.80  |78.7 |                                                                                                  |
+|                |TTTT         | 2.58  |78.4)|                                                                                                  |
 | MobileNetV2-ADN|FFFFF        | 0.32  |72.5 (+0.4 %p)|  [Download](https://drive.google.com/file/d/1bft5SECYXOFjEhPSkAp2Z9d1U-7w2Mnz/view?usp=sharing) |
 |                |TTTTT        | 0.22  |70.6 (+0.4 %p)|                                                                                                  |
 | ViT-b/16-ADN   |FFFF         | 17.58 |81.4 (+0.3 %p) |  [Download](https://drive.google.com/file/d/1DlHNgjDCKJOWWFSuQIjClA5Ewbc6Jy3u/view?usp=sharing)  |
@@ -34,7 +39,7 @@ Performance on ILSVRC-2012 validation set.
 |                |TFFF         | 4.11  |80.8 |                                                                                                  |
 |                |TTFF         | 3.75  |80.0 |                                                                                                  |
 |                |TTTT         | 2.34  |78.0 (0.6 %p)|                                                                                                  |
-
+* ResNet50-ADN(v2) is trained for 600 epochs according to [Pytorch's new training recipe](https://github.com/pytorch/vision/issues/3995#issuecomment-1013906621).
 ## Training and Evaluation on ImageNet
 <details>
 <summary>Requirements</summary>
@@ -67,6 +72,10 @@ To train ResNet50-ADN on ILSVRC2012, run this command:
 torchrun --nproc_per_node=4 train_adn.py --model resnet50 --batch-size 64 --lr-scheduler multisteplr --lr-multi-steps 60 100 140 --epochs 150 --norm-weight-decay 0 --bias-weight-decay 0 --subpath-temp 1.0 --output-dir <checkpoint directory> --data-path <ILSVRC2012 data path> 
 ```
 
+To train ResNet50-ADN(v2) on ILSVRC2012, run this command:
+(Add '--fpn' to include intermediate features for self-distillation)
+torchrun --nproc_per_node=4 train_adn.py --model resnet50 --batch-size 256 --lr 0.5 --lr-scheduler cosineannealinglr --lr-warmup-epochs 5 --lr-warmup-method linear --auto-augment ta_wide --epochs 600 --random-erase 0.1 --weight-decay 0.00002 --norm-weight-decay 0.0 --mixup-alpha 0.2 --cutmix-alpha 1.0 --train-crop-size 176 --model-ema --val-resize-size 232 --ra-sampler --ra-reps=4 --bias-weight-decay 0 --amp --subpath-temp 1.0 --data-path <ILSVRC2012 data path>
+
 To train Mobilenet-V2-ADN, run:
 
 ```train
@@ -98,6 +107,13 @@ To evaluate ResNet50-ADN, run:
 ```eval
 python train_adn.py --model resnet50 --test-only --weights <weights file> --batch-size 256 --skip-cfg False False False False  --data-path <ILSVRC-2012 data path>
 ```
+
+To evaluate ResNet50-ADN(v2), run:
+
+```eval
+ python train_adn.py --test-only --model resnet50 --batch-size 256 --val-resize-size 232 --weights <weights file> --skip-cfg True False False False --data-path <ILSVRC-2012 data path>
+```
+
 
 To evaluate MobileNetV2-ADN, run:
 
