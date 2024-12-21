@@ -1,6 +1,7 @@
 checkpoint/
 pretrained/
 pretrained*/
+resources/
 logs/
 exp*/
 exp-*.ipynb

@@ -24,6 +24,10 @@ import sys
 
 import models
 
+from utils_dist import get_dist_info, is_master, print_at_master
+from semantic.metrics import AccuracySemanticSoftmaxMet
+from semantic.semantic_loss import SemanticSoftmaxLoss, SemanticKDLoss
+from semantic.semantics import ImageNet21kSemanticSoftmax
 
 def train_one_epoch_twobackward(
     model, 
@@ -183,6 +187,101 @@ def evaluate(model, criterion, data_loader, device, print_freq=100, log_suffix="
     return metric_logger.acc1.global_avg
 
 
+
+def train_one_epoch_twobackward_imagenet21k(
+    model, 
+    criterion, 
+    criterion_kd, 
+    optimizer, 
+    data_loader, 
+    device, 
+    epoch, 
+    args, 
+    model_ema=None, 
+    scaler=None,
+    skip_cfg_basenet=None,
+    skip_cfg_supernet=None,
+    subpath_alpha=0.5,
+    ):
+
+    model.train()
+    for i, (image, target) in enumerate(data_loader):
+        start_time = time.time()
+        image, target = image.to(device), target.to(device)
+        # target = target.argmax(dim=1) # from one-hot to index
+        # print("image shape:", image.shape)
+        # print("target shape:", target.shape)
+        # print("target:", target[0,:10])
+
+        alpha = subpath_alpha
+
+        optimizer.zero_grad()
+        with torch.cuda.amp.autocast(enabled=scaler is not None):
+            # forward pass for super_net
+            outputs_full = model(image, skip=skip_cfg_supernet)  # original
+
+            outputs_full_topK, pred_full = outputs_full.topk(500, 1, largest=True, sorted=True)
+            
+            loss_full = criterion(outputs_full, target)
+
+            loss_full = alpha * loss_full
+            
+            with torch.cuda.amp.autocast(enabled=False):
+                if scaler is not None:
+                    scaler.scale(loss_full).backward()
+                else:
+                    loss_full.backward()
+            
+            # forward pass for base_net
+            outputs_skip = model(image, skip=skip_cfg_basenet)
+            loss_kd = criterion_kd(outputs_skip, outputs_full.detach(), target)
+
+            loss_kd = (1. - alpha) * loss_kd
+
+        if scaler is not None:
+            scaler.scale(loss_kd).backward()
+            if args.clip_grad_norm is not None:
+                # we should unscale the gradients of optimizer's assigned params if do gradient clipping
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss_kd.backward()
+            if args.clip_grad_norm is not None:
+                nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
+            optimizer.step()
+
+        if model_ema and i % args.model_ema_steps == 0:
+            model_ema.update_parameters(model)
+            if epoch < args.lr_warmup_epochs:
+                # Reset ema buffer to keep copying weights during warmup period
+                model_ema.n_averaged.fill_(0)
+
+        if i % 100 == 0:
+            # lr=optimizer.param_groups[0]["lr"]
+            print(f"Epoch: {epoch} Iteration: {i} LR: {optimizer.param_groups[0]['lr']:.4f} loss_full: {loss_full.item():.3f} loss_kd: {loss_kd.item():.3f} img/s: {image.shape[0] / (time.time() - start_time):.1f}")   
+
+
+
+def evaluate_imagenet21k(model, criterion, data_loader, device, skip=None, met=None):
+    model.eval()
+
+    print_at_master("starting validation")
+    with torch.inference_mode():
+        for image, target in data_loader:
+            # target = target.argmax(dim=1) # from one-hot to index
+            image = image.to(device, non_blocking=True)
+            target = target.to(device, non_blocking=True)
+            output = model(image, skip=skip)
+
+            # measure accuracy and record loss
+            met.accumulate(output, target)
+    
+    print_at_master("Validation results:")
+    print_at_master('Semantic Acc_Top1 [%] {:.2f} '.format(met.value))
+
+
 def _get_cache_path(filepath):
     import hashlib
 
@@ -265,11 +364,32 @@ def load_data(traindir, valdir, args):
     return dataset, dataset_test, train_sampler, test_sampler
 
 
+def load_model_weights(model, model_path):
+    state = torch.load(model_path, map_location='cpu')
+    # print(state.keys())
+    for key in model.state_dict():
+        if 'num_batches_tracked' in key:
+            print('skipping num_batches_tracked')
+            continue
+        p = model.state_dict()[key]
+        if key in state.keys():
+            ip = state[key]
+            if p.shape == ip.shape:
+                p.data.copy_(ip.data)  # Copy the data of parameters
+            else:
+                print(
+                    'could not load layer: {}, mismatch shape {} ,{}'.format(key, (p.shape), (ip.shape)))
+        else:
+            print('could not load layer: {}, not in checkpoint'.format(key))
+    return model
+
 def main(args):
     if args.output_dir:
         utils.mkdir(args.output_dir)
 
     utils.init_distributed_mode(args)
+
+    print(args)
 
     device = torch.device(args.device)
 
@@ -295,6 +415,10 @@ def main(args):
 
         def collate_fn(batch):
             return mixupcutmix(*default_collate(batch))
+        
+    # print("dataset test")
+    # print(dataset[11000][0].shape)
+    # print(dataset[11000][1])
 
     data_loader = torch.utils.data.DataLoader(
         dataset,
@@ -314,7 +438,12 @@ def main(args):
         print(f"{args.model} is not supported")
         sys.exit()
     
-    model = models.__dict__[args.model]()
+    if args.imagenet21k:
+        num_classes =  10450 # fall11 11221
+    else:
+        num_classes = 1000
+
+    model = models.__dict__[args.model](num_classes=num_classes)
 
     if args.fpn:
         if args.model.startswith("resnet"):
@@ -332,14 +461,26 @@ def main(args):
     if args.weights and args.test_only:
         checkpoint = torch.load(args.weights, map_location="cpu")
         model_without_ddp.load_state_dict(checkpoint)
+    
+    if args.imagenet21k and args.weights:
+        load_model_weights(model_without_ddp, args.weights)
 
     model.to(device)
 
     if args.distributed and args.sync_bn:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
 
-    criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
-    criterion_kd = nn.KLDivLoss(reduction='batchmean')
+    
+    # semantic
+    semantic_softmax_processor = ImageNet21kSemanticSoftmax(args)
+    semantic_met = AccuracySemanticSoftmaxMet(semantic_softmax_processor)
+
+    if args.imagenet21k:
+        criterion = SemanticSoftmaxLoss(semantic_softmax_processor)
+        criterion_kd = SemanticKDLoss(semantic_softmax_processor)
+    else:
+        criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+        criterion_kd = nn.KLDivLoss(reduction='batchmean')
     
     custom_keys_weight_decay = []
     if args.bias_weight_decay is not None:
@@ -453,11 +594,19 @@ def main(args):
             print(f"Error: {args.model} has {model_without_ddp.num_skippable_stages} skippable stages!")
             return
 
-        if model_ema:
-            evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", skip=skip_cfg, fpn=False)
+        if args.imagenet21k:
+            if model_ema:
+                evaluate_imagenet21k(model_ema, criterion, data_loader_test, device=device, skip=skip_cfg, met=semantic_met)
+            else:
+                evaluate_imagenet21k(model, criterion, data_loader_test, device=device, skip=skip_cfg, met=semantic_met)
+            return
+    
         else:
-            evaluate(model, criterion, data_loader_test, device=device, skip=skip_cfg, fpn=args.fpn)
-        return
+            if model_ema:
+                evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", skip=skip_cfg, fpn=False)
+            else:
+                evaluate(model, criterion, data_loader_test, device=device, skip=skip_cfg, fpn=args.fpn)
+            return
     
     num_skippable_stages = model_without_ddp.num_skippable_stages
 
@@ -471,30 +620,56 @@ def main(args):
         if args.distributed:
             train_sampler.set_epoch(epoch)
         
-        train_one_epoch_twobackward(
-            model, 
-            criterion, 
-            criterion_kd, 
-            optimizer, 
-            data_loader, 
-            device, epoch, 
-            args, 
-            model_ema, 
-            scaler, 
-            skip_cfg_basenet, 
-            skip_cfg_supernet, 
-            subpath_alpha=args.subpath_alpha, 
-            subpath_temp=args.subpath_temp,
-            fpn=args.fpn)
-        
+        if args.imagenet21k:
+            train_one_epoch_twobackward_imagenet21k(
+                model, 
+                criterion, 
+                criterion_kd,
+                optimizer, 
+                data_loader, 
+                device, 
+                epoch, 
+                args, 
+                model_ema, 
+                scaler, 
+                skip_cfg_basenet, 
+                skip_cfg_supernet, 
+                subpath_alpha=args.subpath_alpha, 
+                )
+        else:
+            train_one_epoch_twobackward(
+                model, 
+                criterion, 
+                criterion_kd, 
+                optimizer, 
+                data_loader, 
+                device, epoch, 
+                args, 
+                model_ema, 
+                scaler, 
+                skip_cfg_basenet, 
+                skip_cfg_supernet, 
+                subpath_alpha=args.subpath_alpha, 
+                subpath_temp=args.subpath_temp,
+                fpn=args.fpn)
+            
         lr_scheduler.step()
 
-        if model_ema:
-            evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", skip=skip_cfg_basenet, fpn=False)
-            evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", skip=skip_cfg_supernet, fpn=False)
+        if args.imagenet21k:
+            if model_ema:
+                evaluate_imagenet21k(model_ema, criterion, data_loader_test, device=device, skip=skip_cfg_basenet, met=semantic_met)
+                evaluate_imagenet21k(model_ema, criterion, data_loader_test, device=device, skip=skip_cfg_supernet, met=semantic_met)
+            else:
+                evaluate_imagenet21k(model, criterion, data_loader_test, device=device, skip=skip_cfg_basenet, met=semantic_met)
+                evaluate_imagenet21k(model, criterion, data_loader_test, device=device, skip=skip_cfg_supernet, met=semantic_met)    
         else:
-            evaluate(model, criterion, data_loader_test, device=device, skip=skip_cfg_basenet, fpn=args.fpn)
-            evaluate(model, criterion, data_loader_test, device=device, skip=skip_cfg_supernet, fpn=args.fpn)
+            if model_ema:
+                evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", skip=skip_cfg_basenet, fpn=False)
+                evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", skip=skip_cfg_supernet, fpn=False)
+            else:
+                evaluate(model, criterion, data_loader_test, device=device, skip=skip_cfg_basenet, fpn=args.fpn)
+                evaluate(model, criterion, data_loader_test, device=device, skip=skip_cfg_supernet, fpn=args.fpn)
+        
         if args.output_dir:
             checkpoint = {
                 "model": model_without_ddp.state_dict(),
@@ -605,6 +780,10 @@ def get_args_parser(add_help=True):
     parser.add_argument("--ra-magnitude", default=9, type=int, help="magnitude of auto augment policy")
     parser.add_argument("--augmix-severity", default=3, type=int, help="severity of augmix policy")
     parser.add_argument("--random-erase", default=0.0, type=float, help="random erasing probability (default: 0.0)")
+
+    # ImageNet21K pretraining
+    parser.add_argument("--imagenet21k", action="store_true", help="pretrain with imagenet21k")
+    parser.add_argument("--tree_path", default='./resources/imagenet21k_miil_tree.pth', type=str)
 
     # FPN: only support ResNet
     parser.add_argument("--fpn", action="store_true", help="Use FPN in backbone")
