@@ -51,11 +51,11 @@ class SemanticSoftmaxLoss(torch.nn.Module):
 
 class SemanticKDLoss(torch.nn.Module):
     def __init__(self, semantic_softmax_processor):
-        super(SemanticSoftmaxLoss, self).__init__()
+        super(SemanticKDLoss, self).__init__()
         self.semantic_softmax_processor = semantic_softmax_processor
         self.args = semantic_softmax_processor.args
 
-    def forward(self, logits, logits_teacher, targets):
+    def forward(self, logits, logits_teacher, targets, temperature=1.):
         """
         Calculates the semantic KD loss between logits and logits_teacher
         """
@@ -73,16 +73,12 @@ class SemanticKDLoss(torch.nn.Module):
             logits_i = semantic_logit_list[i]
             logits_teacher_i = semantic_logit_teacher_list[i]
             targets_i = semantic_targets_tensor[:, i]
-            
-            # generate probs
-            log_preds = F.log_softmax(logits_i, dim=1)
-            log_preds_teacher = F.log_softmax(logits_teacher_i, dim=1)
 
             # generate targets (with protections)
             targets_i_valid = targets_i.clone()
             targets_i_valid[targets_i_valid < 0] = 0
-            num_classes = logits_i.size()[-1]
-            targets_classes = torch.zeros_like(logits_i).scatter_(1, targets_i_valid.unsqueeze(1), 1)
+            # num_classes = logits_i.size()[-1]
+            # targets_classes = torch.zeros_like(logits_i).scatter_(1, targets_i_valid.unsqueeze(1), 1)
             # wchkang... not sure if this is right
             # targets_classes.mul_(1 - self.args.label_smooth).add_(self.args.label_smooth / num_classes)
 
@@ -92,10 +88,17 @@ class SemanticKDLoss(torch.nn.Module):
             # loss_i = cross_entropy_loss.mean()  # mean over batch
             # losses_list.append(loss_i)
 
+            
+            # make invalid targets to be zero
+            # logits_i *= targets_i_valid.unsqueeze(1)
+            # logits_teacher_i *= targets_i_valid.unsqueeze(1)
+    
+            # generate probs
+            log_preds = F.log_softmax(logits_i / temperature, dim=1)
+            preds_teacher = F.softmax(logits_teacher_i / temperature, dim=1)
+
             # KLDivLoss
-            log_preds *= targets_i_valid.unsqueeze(1)
-            log_preds_teacher *= targets_i_valid.unsqueeze(1)
-            loss_i = F.kl_div(log_preds, log_preds_teacher, reduction='batchmean')
+            loss_i = F.kl_div(log_preds, preds_teacher, reduction='batchmean') * temperature * temperature
             losses_list.append(loss_i)
 
         total_sum = 0
