@@ -74,6 +74,13 @@ class SemanticKDLoss(torch.nn.Module):
             logits_teacher_i = semantic_logit_teacher_list[i]
             targets_i = semantic_targets_tensor[:, i]
 
+            # maximum number of classes is 500
+            max_classes = min(logits_i.size(1), 500)
+
+            # get topK classes
+            logits_teacher_i_topK, logits_teacher_i_topK_idx = logits_teacher_i.topk(max_classes, 1, largest=True, sorted=True)
+            logits_i_topK = logits_i.gather(1, logits_teacher_i_topK_idx)
+
             # generate targets (with protections)
             targets_i_valid = targets_i.clone()
             targets_i_valid[targets_i_valid < 0] = 0
@@ -94,8 +101,8 @@ class SemanticKDLoss(torch.nn.Module):
             # logits_teacher_i *= targets_i_valid.unsqueeze(1)
     
             # generate probs
-            log_preds = F.log_softmax(logits_i / temperature, dim=1)
-            preds_teacher = F.softmax(logits_teacher_i / temperature, dim=1)
+            log_preds = F.log_softmax(logits_i_topK / temperature, dim=1)
+            preds_teacher = F.softmax(logits_teacher_i_topK / temperature, dim=1)
 
             # KLDivLoss
             loss_i = F.kl_div(log_preds, preds_teacher, reduction='batchmean') * temperature * temperature

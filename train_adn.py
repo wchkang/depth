@@ -260,7 +260,7 @@ def train_one_epoch_twobackward_imagenet21k(
 
         if i % 100 == 0:
             # lr=optimizer.param_groups[0]["lr"]
-            print(f"Epoch: {epoch} Iteration: {i} LR: {optimizer.param_groups[0]['lr']:.4f} loss_full: {loss_full.item():.3f} loss_kd: {loss_kd.item():.3f} img/s: {image.shape[0] / (time.time() - start_time):.1f}")   
+            print(f"Epoch: {epoch} Iteration: {i} LR: {optimizer.param_groups[0]['lr']:.6f} loss_full: {loss_full.item():.3f} loss_kd: {loss_kd.item():.3f} img/s: {image.shape[0] / (time.time() - start_time):.1f}")   
 
 
 
