@@ -34,7 +34,7 @@ class SemanticSoftmaxLoss(torch.nn.Module):
             num_classes = logits_i.size()[-1]
             targets_classes = torch.zeros_like(logits_i).scatter_(1, targets_i_valid.unsqueeze(1), 1)
             # wchkang... not sure if this is right
-            self.args.label_smooth = 0.2 # label smoothing
+            self.args.label_smooth = 0.2 # label smoothing original
             targets_classes.mul_(1 - self.args.label_smooth).add_(self.args.label_smooth / num_classes)
 
             cross_entropy_loss_tot = -targets_classes.mul(log_preds)
@@ -44,10 +44,18 @@ class SemanticSoftmaxLoss(torch.nn.Module):
             losses_list.append(loss_i)
 
         total_sum = 0
+        # print("losses_list:", losses_list)
+
+        # wchkang: exp 2025.01.25
+        drop_loss_prob = 0.2
+        drop_loss =  (torch.rand((len(losses_list),)) > drop_loss_prob).to(torch.float)
+
         for i, loss_h in enumerate(losses_list):  # summing over hirarchies
-            total_sum += loss_h * self.semantic_softmax_processor.normalization_factor_list[i]
+            total_sum += loss_h * self.semantic_softmax_processor.normalization_factor_list[i]  #orig
+            # total_sum += loss_h * self.semantic_softmax_processor.normalization_factor_list[i] * drop_loss[i] # exp
 
         return total_sum
+
 
 class SemanticKDLoss(torch.nn.Module):
     def __init__(self, semantic_softmax_processor):
