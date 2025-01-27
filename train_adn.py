@@ -18,6 +18,7 @@ from torch.utils.data.dataloader import default_collate
 from torchvision.transforms.functional import InterpolationMode
 
 from models._utils_fpn import IntermediateLayerGetter
+from models.misc import FrozenBatchNorm2d
 
 import torch.nn.functional as F
 import sys
@@ -187,7 +188,6 @@ def evaluate(model, criterion, data_loader, device, print_freq=100, log_suffix="
     return metric_logger.acc1.global_avg
 
 
-
 def train_one_epoch_twobackward_imagenet21k(
     model, 
     criterion, 
@@ -202,6 +202,7 @@ def train_one_epoch_twobackward_imagenet21k(
     skip_cfg_basenet=None,
     skip_cfg_supernet=None,
     subpath_alpha=0.5,
+    subpath_temp=0.1,
     ):
 
     model.train()
@@ -234,7 +235,7 @@ def train_one_epoch_twobackward_imagenet21k(
             
             # forward pass for base_net
             outputs_skip = model(image, skip=skip_cfg_basenet)
-            loss_kd = criterion_kd(outputs_skip, outputs_full.detach(), target)
+            loss_kd = criterion_kd(outputs_skip, outputs_full.detach(), target, temperature=subpath_temp)
 
             loss_kd = (1. - alpha) * loss_kd
 
@@ -261,6 +262,83 @@ def train_one_epoch_twobackward_imagenet21k(
         if i % 100 == 0:
             # lr=optimizer.param_groups[0]["lr"]
             print(f"Epoch: {epoch} Iteration: {i} LR: {optimizer.param_groups[0]['lr']:.6f} loss_full: {loss_full.item():.3f} loss_kd: {loss_kd.item():.3f} img/s: {image.shape[0] / (time.time() - start_time):.1f}")   
+
+def train_one_epoch_twobackward_imagenet21k_no_kd(
+    model, 
+    criterion, 
+    criterion_kd, 
+    optimizer, 
+    data_loader, 
+    device, 
+    epoch, 
+    args, 
+    model_ema=None, 
+    scaler=None,
+    skip_cfg_basenet=None,
+    skip_cfg_supernet=None,
+    subpath_alpha=0.5,
+    subpath_temp=0.1,
+    ):
+
+    model.train()
+    for i, (image, target) in enumerate(data_loader):
+        start_time = time.time()
+        image, target = image.to(device), target.to(device)
+        # target = target.argmax(dim=1) # from one-hot to index
+        # print("image shape:", image.shape)
+        # print("target shape:", target.shape)
+        # print("target:", target[0,:10])
+
+        alpha = subpath_alpha
+
+        optimizer.zero_grad()
+        with torch.cuda.amp.autocast(enabled=scaler is not None):
+            # forward pass for super_net
+            outputs_full = model(image, skip=skip_cfg_supernet)  # original
+
+            outputs_full_topK, pred_full = outputs_full.topk(500, 1, largest=True, sorted=True)
+            
+            loss_full = criterion(outputs_full, target)
+
+            loss_full = alpha * loss_full
+            
+            with torch.cuda.amp.autocast(enabled=False):
+                if scaler is not None:
+                    scaler.scale(loss_full).backward()
+                else:
+                    loss_full.backward()
+            
+            # forward pass for base_net
+            outputs_skip = model(image, skip=skip_cfg_basenet)
+            loss_base = criterion(outputs_skip, target)
+
+            loss_base = (1. - alpha) * loss_base
+
+        if scaler is not None:
+            scaler.scale(loss_base).backward()
+            if args.clip_grad_norm is not None:
+                # we should unscale the gradients of optimizer's assigned params if do gradient clipping
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss_base.backward()
+            if args.clip_grad_norm is not None:
+                nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
+            optimizer.step()
+
+        if model_ema and i % args.model_ema_steps == 0:
+            model_ema.update_parameters(model)
+            if epoch < args.lr_warmup_epochs:
+                # Reset ema buffer to keep copying weights during warmup period
+                model_ema.n_averaged.fill_(0)
+
+        if i % 100 == 0:
+            # lr=optimizer.param_groups[0]["lr"]
+            print(f"Epoch: {epoch} Iteration: {i} LR: {optimizer.param_groups[0]['lr']:.6f} loss_full: {loss_full.item():.3f} loss_base: {loss_base.item():.3f} img/s: {image.shape[0] / (time.time() - start_time):.1f}")   
+
+
 
 
 
@@ -383,6 +461,20 @@ def load_model_weights(model, model_path):
             print('could not load layer: {}, not in checkpoint'.format(key))
     return model
 
+def freeze_parameters(m: nn.Module):
+    for p in m.parameters():
+        p.requires_grad = False
+
+def freeze_norm(m: nn.Module):
+    if isinstance(m, nn.BatchNorm2d):
+        m = FrozenBatchNorm2d(m.num_features)
+    else:
+        for name, child in m.named_children():
+            _child = freeze_norm(child)
+            if _child is not child:
+                setattr(m, name, _child)
+    return m  
+
 def main(args):
     if args.output_dir:
         utils.mkdir(args.output_dir)
@@ -470,7 +562,14 @@ def main(args):
     if args.distributed and args.sync_bn:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
 
-    
+    # if args.imagenet21k and args.freeze_params:
+    #     print("Freeze parameters.")
+    #     # freeze_parameters(model)
+    #     freeze_norm(model)
+    #     # for param in model.fc.parameters():
+    #         # param.requires_grad = True
+
+
     # semantic
     semantic_softmax_processor = ImageNet21kSemanticSoftmax(args)
     semantic_met = AccuracySemanticSoftmaxMet(semantic_softmax_processor)
@@ -621,7 +720,8 @@ def main(args):
             train_sampler.set_epoch(epoch)
         
         if args.imagenet21k:
-            train_one_epoch_twobackward_imagenet21k(
+            # train_one_epoch_twobackward_imagenet21k_no_kd(
+            train_one_epoch_twobackward_imagenet21k_no_kd(  # experiment
                 model, 
                 criterion, 
                 criterion_kd,
@@ -635,6 +735,7 @@ def main(args):
                 skip_cfg_basenet, 
                 skip_cfg_supernet, 
                 subpath_alpha=args.subpath_alpha, 
+                subpath_temp=args.subpath_temp,
                 )
         else:
             train_one_epoch_twobackward(
@@ -784,6 +885,7 @@ def get_args_parser(add_help=True):
     # ImageNet21K pretraining
     parser.add_argument("--imagenet21k", action="store_true", help="pretrain with imagenet21k")
     parser.add_argument("--tree_path", default='./resources/imagenet21k_miil_tree.pth', type=str)
+    parser.add_argument("--freeze_params", action="store_true", help="freeze parameters and norms except the head")
 
     # FPN: only support ResNet
     parser.add_argument("--fpn", action="store_true", help="Use FPN in backbone")
