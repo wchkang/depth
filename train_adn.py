@@ -191,7 +191,8 @@ def evaluate(model, criterion, data_loader, device, print_freq=100, log_suffix="
 def train_one_epoch_twobackward_imagenet21k(
     model, 
     criterion, 
-    criterion_kd, 
+    criterion_kd,
+    criterion_kd_semantic, 
     optimizer, 
     data_loader, 
     device, 
@@ -203,6 +204,7 @@ def train_one_epoch_twobackward_imagenet21k(
     skip_cfg_supernet=None,
     subpath_alpha=0.5,
     subpath_temp=0.1,
+    fpn=False,
     ):
 
     model.train()
@@ -221,7 +223,11 @@ def train_one_epoch_twobackward_imagenet21k(
             # forward pass for super_net
             outputs_full = model(image, skip=skip_cfg_supernet)  # original
 
-            outputs_full_topK, pred_full = outputs_full.topk(500, 1, largest=True, sorted=True)
+            if fpn:
+                outputs_full_features = outputs_full["features"]
+                outputs_full = outputs_full["model_out"]
+
+            # outputs_full_topK, pred_full = outputs_full.topk(500, 1, largest=True, sorted=True)
             
             loss_full = criterion(outputs_full, target)
 
@@ -235,9 +241,26 @@ def train_one_epoch_twobackward_imagenet21k(
             
             # forward pass for base_net
             outputs_skip = model(image, skip=skip_cfg_basenet)
-            loss_kd = criterion_kd(outputs_skip, outputs_full.detach(), target, temperature=subpath_temp)
 
-            loss_kd = (1. - alpha) * loss_kd
+            if fpn:
+                outputs_skip_features = outputs_skip["features"]
+                outputs_skip = outputs_skip["model_out"]
+
+            loss_feature_kd = 0
+
+            T = subpath_temp 
+
+            # get feature KD loss. Only ResNet50 is supported.
+            if fpn:
+                for k, _ in outputs_full_features.items():
+                    loss_feature_kd += criterion_kd(F.log_softmax(outputs_skip_features[k]/T, dim=1), F.softmax(outputs_full_features[k].clone().detach()/T, dim=1)) * T*T
+
+            # loss_softmax_kd = criterion_kd_semantic(outputs_skip, outputs_full.detach(), target, temperature=subpath_temp)
+
+            # final loss
+            # loss_kd = (1. - alpha) * (loss_softmax_kd  + loss_feature_kd)
+            loss_kd = (1. - alpha) * loss_feature_kd
+
 
         if scaler is not None:
             scaler.scale(loss_kd).backward()
@@ -261,7 +284,11 @@ def train_one_epoch_twobackward_imagenet21k(
 
         if i % 100 == 0:
             # lr=optimizer.param_groups[0]["lr"]
-            print(f"Epoch: {epoch} Iteration: {i} LR: {optimizer.param_groups[0]['lr']:.6f} loss_full: {loss_full.item():.3f} loss_kd: {loss_kd.item():.3f} img/s: {image.shape[0] / (time.time() - start_time):.1f}")   
+            print(f"Epoch: {epoch} Iteration: {i} LR: {optimizer.param_groups[0]['lr']:.6f} "
+                  f"loss_full: {loss_full.item():.3f} loss_kd: {loss_kd.item():.3f} "
+                #   f"loss_softmax_kd: {loss_softmax_kd.item():.3f} "
+                  f"loss_feature_kd: {loss_feature_kd.item():.3f} "
+                  f"img/s: {image.shape[0] / (time.time() - start_time):.1f}")   
 
 def train_one_epoch_twobackward_imagenet21k_no_kd(
     model, 
@@ -342,7 +369,7 @@ def train_one_epoch_twobackward_imagenet21k_no_kd(
 
 
 
-def evaluate_imagenet21k(model, criterion, data_loader, device, skip=None, met=None):
+def evaluate_imagenet21k(model, criterion, data_loader, device, skip=None, met=None, fpn=False):
     model.eval()
 
     print_at_master("starting validation")
@@ -352,6 +379,9 @@ def evaluate_imagenet21k(model, criterion, data_loader, device, skip=None, met=N
             image = image.to(device, non_blocking=True)
             target = target.to(device, non_blocking=True)
             output = model(image, skip=skip)
+
+            if fpn:
+                output = output["model_out"]
 
             # measure accuracy and record loss
             met.accumulate(output, target)
@@ -539,9 +569,10 @@ def main(args):
 
     if args.fpn:
         if args.model.startswith("resnet"):
-            model = models.resnet50()
+            model = models.resnet50(num_classes=num_classes)
 
-            model = IntermediateLayerGetter(model, ['layer1', 'layer2', 'layer3'])
+            # model = IntermediateLayerGetter(model, ['layer1', 'layer2', 'layer3']) # original
+            model = IntermediateLayerGetter(model, ['layer2', 'layer3', 'layer4']) # for rtdetr
         else:
             print("[experiment] fpn is only supported for resnet models")
             sys.exit()
@@ -549,6 +580,8 @@ def main(args):
         model_without_ddp = model.model
     else:
         model_without_ddp = model
+
+    print(model)
     
     if args.weights and args.test_only:
         checkpoint = torch.load(args.weights, map_location="cpu")
@@ -576,7 +609,8 @@ def main(args):
 
     if args.imagenet21k:
         criterion = SemanticSoftmaxLoss(semantic_softmax_processor)
-        criterion_kd = SemanticKDLoss(semantic_softmax_processor)
+        criterion_kd = nn.KLDivLoss(reduction='batchmean')
+        criterion_kd_semantic = SemanticKDLoss(semantic_softmax_processor)
     else:
         criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
         criterion_kd = nn.KLDivLoss(reduction='batchmean')
@@ -695,9 +729,9 @@ def main(args):
 
         if args.imagenet21k:
             if model_ema:
-                evaluate_imagenet21k(model_ema, criterion, data_loader_test, device=device, skip=skip_cfg, met=semantic_met)
+                evaluate_imagenet21k(model_ema, criterion, data_loader_test, device=device, skip=skip_cfg, met=semantic_met, fpn=False)
             else:
-                evaluate_imagenet21k(model, criterion, data_loader_test, device=device, skip=skip_cfg, met=semantic_met)
+                evaluate_imagenet21k(model, criterion, data_loader_test, device=device, skip=skip_cfg, met=semantic_met, fpn=args.fpn)
             return
     
         else:
@@ -720,11 +754,11 @@ def main(args):
             train_sampler.set_epoch(epoch)
         
         if args.imagenet21k:
-            # train_one_epoch_twobackward_imagenet21k_no_kd(
-            train_one_epoch_twobackward_imagenet21k_no_kd(  # experiment
+            train_one_epoch_twobackward_imagenet21k(
                 model, 
                 criterion, 
                 criterion_kd,
+                criterion_kd_semantic,
                 optimizer, 
                 data_loader, 
                 device, 
@@ -736,7 +770,24 @@ def main(args):
                 skip_cfg_supernet, 
                 subpath_alpha=args.subpath_alpha, 
                 subpath_temp=args.subpath_temp,
+                fpn=args.fpn,
                 )
+            # train_one_epoch_twobackward_imagenet21k_no_kd(  # experiment
+            #     model, 
+            #     criterion, 
+            #     criterion_kd,
+            #     optimizer, 
+            #     data_loader, 
+            #     device, 
+            #     epoch, 
+            #     args, 
+            #     model_ema, 
+            #     scaler, 
+            #     skip_cfg_basenet, 
+            #     skip_cfg_supernet, 
+            #     subpath_alpha=args.subpath_alpha, 
+            #     subpath_temp=args.subpath_temp,
+            #     )
         else:
             train_one_epoch_twobackward(
                 model, 
@@ -758,11 +809,11 @@ def main(args):
 
         if args.imagenet21k:
             if model_ema:
-                evaluate_imagenet21k(model_ema, criterion, data_loader_test, device=device, skip=skip_cfg_basenet, met=semantic_met)
-                evaluate_imagenet21k(model_ema, criterion, data_loader_test, device=device, skip=skip_cfg_supernet, met=semantic_met)
+                evaluate_imagenet21k(model_ema, criterion, data_loader_test, device=device, skip=skip_cfg_basenet, met=semantic_met, fpn=False)
+                evaluate_imagenet21k(model_ema, criterion, data_loader_test, device=device, skip=skip_cfg_supernet, met=semantic_met, fpn=False)
             else:
-                evaluate_imagenet21k(model, criterion, data_loader_test, device=device, skip=skip_cfg_basenet, met=semantic_met)
-                evaluate_imagenet21k(model, criterion, data_loader_test, device=device, skip=skip_cfg_supernet, met=semantic_met)    
+                evaluate_imagenet21k(model, criterion, data_loader_test, device=device, skip=skip_cfg_basenet, met=semantic_met, fpn=args.fpn)
+                evaluate_imagenet21k(model, criterion, data_loader_test, device=device, skip=skip_cfg_supernet, met=semantic_met, fpn=args.fpn)    
         else:
             if model_ema:
                 evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", skip=skip_cfg_basenet, fpn=False)
