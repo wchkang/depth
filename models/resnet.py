@@ -19,6 +19,7 @@ from ._utils import _ovewrite_named_param, handle_legacy_interface
 __all__ = [
     "ResNet",
     "resnet50",
+    "resnet50vd", # variant 'd' for downsample
     "resnet101",
 ]
 
@@ -138,6 +139,7 @@ class ResNet(nn.Module):
         width_per_group: int = 64,
         replace_stride_with_dilation: Optional[List[bool]] = None,
         norm_layer: Optional[Callable[..., nn.Module]] = None,
+        variant: str = 'a', # 'a', or 'd' for downsample
     ) -> None:
         super().__init__()
         _log_api_usage_once(self)
@@ -203,10 +205,18 @@ class ResNet(nn.Module):
             self.dilation *= stride
             stride = 1
         if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                conv1x1(self.inplanes, planes * block.expansion, stride),
-                norm_layer(planes * block.expansion),
-            )
+            if stride ==2 and self.variant == 'd':
+                downsample = nn.Sequential(
+                    nn.AvgPool2d(2, 2, 0, ceil_mode=True),
+                    conv1x1(self.inplanes, planes * block.expansion, stride=1),
+                    norm_layer(planes * block.expansion),
+                )
+                print(f"Downsample: {self.variant}")
+            else:
+                downsample = nn.Sequential(
+                    conv1x1(self.inplanes, planes * block.expansion, stride),
+                    norm_layer(planes * block.expansion),
+                )
 
         layers = []
 
@@ -282,6 +292,10 @@ def _resnet(
     return model
 
 def resnet50(*, weights = None, progress: bool = True, **kwargs: Any) -> ResNet:
+    return _resnet(Bottleneck, [3, 4, 6, 3], weights, progress, **kwargs)
+
+def resnet50vd(*, weights = None, progress: bool = True, **kwargs: Any) -> ResNet:
+    kwargs['variant'] = 'd'
     return _resnet(Bottleneck, [3, 4, 6, 3], weights, progress, **kwargs)
 
 
