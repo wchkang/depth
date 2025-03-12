@@ -114,7 +114,7 @@ python train_adn.py --model resnet50 --test-only --weights <weights file> --batc
 To evaluate ResNet50-ADN(v2), run:
 
 ```eval
- python train_adn.py --test-only --model resnet50 --batch-size 256 --val-resize-size 232 --weights <weights file> --skip-cfg True False False False --data-path <ILSVRC-2012 data path>
+ python train_adn.py --test-only --model resnet50 --batch-size 256 --val-resize-size 232 --weights <weights file> --skip-cfg False False False False --data-path <ILSVRC-2012 data path>
 ```
 
 
