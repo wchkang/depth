@@ -30,6 +30,8 @@ from semantic.metrics import AccuracySemanticSoftmaxMet
 from semantic.semantic_loss import SemanticSoftmaxLoss, SemanticKDLoss
 from semantic.semantics import ImageNet21kSemanticSoftmax
 
+from utils_criterion import JSD
+
 def train_one_epoch_twobackward(
     model, 
     criterion, 
@@ -188,7 +190,116 @@ def evaluate(model, criterion, data_loader, device, print_freq=100, log_suffix="
     return metric_logger.acc1.global_avg
 
 
+# original
 def train_one_epoch_twobackward_external_teacher(
+    model_teacher,
+    model, 
+    criterion,
+    criterion_kd, 
+    optimizer, 
+    data_loader, 
+    device, 
+    epoch, 
+    args, 
+    model_ema=None, 
+    scaler=None,
+    skip_cfg_basenet=None,
+    skip_cfg_supernet=None,
+    subpath_alpha=0.5,
+    subpath_temp_teacher_full=1.0,
+    subpath_temp_full_base=1.0
+    ):
+    model_teacher.eval()
+    model.train()
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger.add_meter("lr", utils.SmoothedValue(window_size=1, fmt="{value}"))
+    metric_logger.add_meter("img/s", utils.SmoothedValue(window_size=10, fmt="{value}"))
+
+    header = f"Epoch: [{epoch}]"
+    for i, (image, target) in enumerate(metric_logger.log_every(data_loader, args.print_freq, header)):
+        start_time = time.time()
+        image, target = image.to(device), target.to(device)
+
+        alpha = subpath_alpha
+
+        optimizer.zero_grad()
+        with torch.cuda.amp.autocast(enabled=scaler is not None):
+            top_k = 100 # default: 500
+            # forward pass for the teacher
+            with torch.no_grad():
+               outputs_teacher = model_teacher(image) 
+            outputs_teacher_topK, pred_teacher = outputs_teacher.topk(top_k, 1, largest=True, sorted=True)
+            
+            # forward pass for super_net
+            outputs_full = model(image, skip=skip_cfg_supernet)  # original         
+            outputs_full_topK, pred_full = outputs_full.topk(top_k, 1, largest=True, sorted=True)
+
+            # loss_full= criterion(outputs_full, target)
+            
+            T = subpath_temp_teacher_full
+         
+            # get softmax KD loss between the teacher and the super
+            outputs_full_topK = outputs_full.gather(1, pred_teacher) 
+            loss_softmax_kd_teacher_full = criterion_kd(F.log_softmax(outputs_full_topK[:,0:top_k]/T, dim=1), F.softmax(outputs_teacher_topK[:,0:top_k].clone().detach()/T, dim=1)) * T*T
+
+            loss_full = alpha * loss_softmax_kd_teacher_full
+            
+            with torch.cuda.amp.autocast(enabled=False):
+                if scaler is not None:
+                    scaler.scale(loss_full).backward()
+                else:
+                    loss_full.backward()
+            
+            # forward pass for base_net
+            outputs_skip = model(image, skip=skip_cfg_basenet)
+
+            T = subpath_temp_full_base
+
+            # orig #1: get softmax KD loss between the super and the base
+            outputs_skip_topK = outputs_skip.gather(1, pred_full)
+            loss_softmax_kd_full_base = criterion_kd(F.log_softmax(outputs_skip_topK[:,0:top_k]/T, dim=1), F.softmax(outputs_full_topK[:,0:top_k].clone().detach()/T, dim=1)) * T*T
+
+            # exp: get softmax KD loss between the teacher and the base
+            # outputs_skip_topK = outputs_skip.gather(1, pred_teacher)
+            # loss_softmax_kd_full_base = criterion_kd(F.log_softmax(outputs_skip_topK[:,0:500]/T, dim=1), F.softmax(outputs_teacher_topK[:,0:500].clone().detach()/T, dim=1)) * T*T
+
+            # final loss
+            loss_skip = (1 - alpha) * loss_softmax_kd_full_base
+
+        if scaler is not None:
+            scaler.scale(loss_skip).backward()
+            if args.clip_grad_norm is not None:
+                # we should unscale the gradients of optimizer's assigned params if do gradient clipping
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss_skip.backward()
+            if args.clip_grad_norm is not None:
+                nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
+            optimizer.step()
+
+        if model_ema and i % args.model_ema_steps == 0:
+            model_ema.update_parameters(model)
+            if epoch < args.lr_warmup_epochs:
+                # Reset ema buffer to keep copying weights during warmup period
+                model_ema.n_averaged.fill_(0)
+
+        # acc1, acc5 = utils.accuracy(outputs_full, target, topk=(1, 5))
+        batch_size = image.shape[0]
+        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        metric_logger.meters["loss_full"].update(loss_full.item(), n=batch_size)
+        metric_logger.meters["loss_skip"].update(loss_skip.item(), n=batch_size)
+        metric_logger.meters["loss_kd_teacher_full"].update(loss_softmax_kd_teacher_full.item(), n=batch_size)
+        metric_logger.meters["loss_kd_full_base"].update(loss_softmax_kd_full_base.item(), n=batch_size)
+      
+        metric_logger.meters["img/s"].update(batch_size / (time.time() - start_time))
+
+        sys.stdout.flush()
+
+# JSD 
+def train_one_epoch_twobackward_external_teacher_JSD(
     model_teacher,
     model, 
     criterion,
@@ -237,7 +348,10 @@ def train_one_epoch_twobackward_external_teacher(
          
             # get softmax KD loss between the teacher and the super
             outputs_full_topK = outputs_full.gather(1, pred_teacher) 
-            loss_softmax_kd_teacher_full = criterion_kd(F.log_softmax(outputs_full_topK[:,0:500]/T, dim=1), F.softmax(outputs_teacher_topK[:,0:500].clone().detach()/T, dim=1)) * T*T
+            # loss_softmax_kd_teacher_full = criterion_kd(F.log_softmax(outputs_full_topK[:,0:500]/T, dim=1), F.softmax(outputs_teacher_topK[:,0:500].clone().detach()/T, dim=1)) * T*T
+
+            loss_softmax_kd_teacher_full = criterion_kd(outputs_full_topK[:,0:500], outputs_teacher_topK[:,0:500].clone().detach()) 
+
 
             loss_full = alpha * loss_softmax_kd_teacher_full
             
@@ -254,7 +368,9 @@ def train_one_epoch_twobackward_external_teacher(
 
             # orig #1: get softmax KD loss between the super and the base
             outputs_skip_topK = outputs_skip.gather(1, pred_full)
-            loss_softmax_kd_full_base = criterion_kd(F.log_softmax(outputs_skip_topK[:,0:500]/T, dim=1), F.softmax(outputs_full_topK[:,0:500].clone().detach()/T, dim=1)) * T*T
+
+            # JSD           
+            loss_softmax_kd_full_base = criterion_kd(outputs_skip_topK[:,0:500], outputs_full_topK[:,0:500].clone().detach())
 
             # exp: get softmax KD loss between the teacher and the base
             # outputs_skip_topK = outputs_skip.gather(1, pred_teacher)
@@ -287,12 +403,14 @@ def train_one_epoch_twobackward_external_teacher(
         batch_size = image.shape[0]
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         metric_logger.meters["loss_full"].update(loss_full.item(), n=batch_size)
+        metric_logger.meters["loss_skip"].update(loss_skip.item(), n=batch_size)
         metric_logger.meters["loss_kd_teacher_full"].update(loss_softmax_kd_teacher_full.item(), n=batch_size)
-        metric_logger.meters["loss_kd_full_base"].update(loss_skip.item(), n=batch_size)
+        metric_logger.meters["loss_kd_full_base"].update(loss_softmax_kd_full_base.item(), n=batch_size)
       
         metric_logger.meters["img/s"].update(batch_size / (time.time() - start_time))
 
         sys.stdout.flush()
+
 
 def _get_cache_path(filepath):
     import hashlib
@@ -376,7 +494,26 @@ def load_data(traindir, valdir, args):
     return dataset, dataset_test, train_sampler, test_sampler
 
 
-def load_model_weights(model, model_path):
+def freeze_parameters(m: nn.Module):
+    for p in m.parameters():
+        p.requires_grad = False
+
+
+def freeze_norm(m: nn.Module):
+    if isinstance(m, nn.BatchNorm2d):
+        m = FrozenBatchNorm2d(m.num_features)
+    else:
+        for name, child in m.named_children():
+            _child = freeze_norm(child)
+            if _child is not child:
+                setattr(m, name, _child)
+    return m  
+
+
+def load_model_weights(model, model_path, freeze_bn=False):
+    if freeze_bn:
+        print("freeze norm")
+        model = freeze_norm(model)
     state = torch.load(model_path, map_location='cpu')
     # print(state.keys())
     for key in model.state_dict():
@@ -393,21 +530,8 @@ def load_model_weights(model, model_path):
                     'could not load layer: {}, mismatch shape {} ,{}'.format(key, (p.shape), (ip.shape)))
         else:
             print('could not load layer: {}, not in checkpoint'.format(key))
+       
     return model
-
-def freeze_parameters(m: nn.Module):
-    for p in m.parameters():
-        p.requires_grad = False
-
-def freeze_norm(m: nn.Module):
-    if isinstance(m, nn.BatchNorm2d):
-        m = FrozenBatchNorm2d(m.num_features)
-    else:
-        for name, child in m.named_children():
-            _child = freeze_norm(child)
-            if _child is not child:
-                setattr(m, name, _child)
-    return m  
 
 def main(args):
     if args.output_dir:
@@ -426,7 +550,9 @@ def main(args):
         torch.backends.cudnn.benchmark = True
 
     # exp: distill using imagenet21k and evalute using imagenet1k
-    train_dir = os.path.join("/media/data/imagenet21k_resized/", "train")
+    # train_dir = os.path.join("~/data/imagenet21k_resized/", "train_val_small_classes")
+    # train_dir = os.path.join("~/data/imagenet21k_resized/", "train_val")
+    train_dir = os.path.join("~/data/imagenet21k_resized/", "imagenet21k-1k-merged")
     # train_dir = os.path.join("/media/data/ILSVRC2012/", "train")
     val_dir = os.path.join("/media/data/ILSVRC2012/", "val")
     dataset, dataset_test, train_sampler, test_sampler = load_data(train_dir, val_dir, args)
@@ -465,12 +591,15 @@ def main(args):
     # model_teacher = torchvision.models.resnet101(weights=weights)
     # weights = torchvision.models.EfficientNet_V2_S_Weights
     # model_teacher = torchvision.models.efficientnet_v2_s(weights=weights)
+
+    # ResNext101
+    weights = torchvision.models.ResNeXt101_64X4D_Weights.IMAGENET1K_V1
+    model_teacher = torchvision.models.resnext101_64x4d(weights=weights)
+
     # PResNet101
-    checkpoint = torch.load("./pretrained/ResNet101_vd_ssld_pretrained.pth")
-    model_teacher = models.PResNet(depth=101, freeze_norm=False, pretrained=False)
-    print(model_teacher)
-    model_teacher.load_state_dict(checkpoint)
-    print(model_teacher.fc.weight.shape)
+    # checkpoint = torch.load("./pretrained/ResNet101_vd_ssld_pretrained.pth")
+    # model_teacher = models.PResNet(depth=101, freeze_norm=True, pretrained=False)
+    # model_teacher.load_state_dict(checkpoint)
 
     print("Creating model")
     if args.model not in models.__dict__.keys():
@@ -504,8 +633,7 @@ def main(args):
     # if args.imagenet21k and args.weights:
     if args.weights:
         print("Loading weights: ", args.weights)
-        load_model_weights(model_without_ddp, args.weights)
-
+        load_model_weights(model_without_ddp, args.weights, freeze_bn=False)
 
     if args.distributed and args.sync_bn:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -530,6 +658,7 @@ def main(args):
     else:
         criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
         criterion_kd = nn.KLDivLoss(reduction='batchmean')
+        # criterion_kd = JSD()
     
     custom_keys_weight_decay = []
     if args.bias_weight_decay is not None:
@@ -670,38 +799,22 @@ def main(args):
         if args.distributed:
             train_sampler.set_epoch(epoch)
         
-        # if args.imagenet21k:
-        #     train_one_epoch_twobackward_imagenet21k(
-        #         model, 
-        #         criterion, 
-        #         criterion_kd,
-        #         optimizer, 
-        #         data_loader, 
-        #         device, 
-        #         epoch, 
-        #         args, 
-        #         model_ema, 
-        #         scaler, 
-        #         skip_cfg_basenet, 
-        #         skip_cfg_supernet, 
-        #         subpath_alpha=args.subpath_alpha, 
-        #         )
-        # else:
-        #     train_one_epoch_twobackward(
-        #         model, 
-        #         criterion, 
-        #         criterion_kd, 
-        #         optimizer, 
-        #         data_loader, 
-        #         device, epoch, 
-        #         args, 
-        #         model_ema, 
-        #         scaler, 
-        #         skip_cfg_basenet, 
-        #         skip_cfg_supernet, 
-        #         subpath_alpha=args.subpath_alpha, 
-        #         subpath_temp=args.subpath_temp,
-        #         fpn=args.fpn)
+        # train_one_epoch_twobackward(
+        #     model, 
+        #     criterion, 
+        #     criterion_kd, 
+        #     optimizer, 
+        #     data_loader, 
+        #     device, epoch, 
+        #     args, 
+        #     model_ema, 
+        #     scaler, 
+        #     skip_cfg_basenet, 
+        #     skip_cfg_supernet, 
+        #     subpath_alpha=args.subpath_alpha, 
+        #     subpath_temp=args.subpath_temp,
+        #     fpn=args.fpn
+        #     )
 
         train_one_epoch_twobackward_external_teacher(
                 model_teacher,
