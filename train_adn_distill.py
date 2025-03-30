@@ -253,7 +253,7 @@ def train_one_epoch_twobackward_external_teacher(
             # forward pass for base_net
             outputs_skip = model(image, skip=skip_cfg_basenet)
 
-            T = subpath_temp_full_base
+            T = subpath_temp_full_base * 2.0 # experiment: 2025.03.26
 
             # orig #1: get softmax KD loss between the super and the base
             outputs_skip_topK = outputs_skip.gather(1, pred_full)
@@ -552,11 +552,15 @@ def main(args):
     # exp: distill using imagenet21k and evalute using imagenet1k
     # train_dir = os.path.join("~/data/imagenet21k_resized/", "train_val_small_classes")
     # train_dir = os.path.join("~/data/imagenet21k_resized/", "train_val")
-    train_dir = os.path.join("~/data/imagenet21k_resized/", "imagenet21k-1k-merged")
+    # train_dir = os.path.join("/media/data/imagenet21k_resized/", "imagenet21k-1k-merged")
+    train_dir = os.path.join("/media/data/", "imagenet21k-1k-merged")
     # train_dir = os.path.join("/media/data/ILSVRC2012/", "train")
     val_dir = os.path.join("/media/data/ILSVRC2012/", "val")
     dataset, dataset_test, train_sampler, test_sampler = load_data(train_dir, val_dir, args)
 
+    # experimetn to use both 1k and 21k alternatively
+    # dataset_21k, _, train_21k_sampler, _ = load_data(train_dir_21k, val_dir, args)
+    
     collate_fn = None
     num_classes = len(dataset.classes)
     mixup_transforms = []
@@ -582,6 +586,17 @@ def main(args):
         pin_memory=True,
         collate_fn=collate_fn,
     )
+
+    # experiment to use both 21k and 1k 
+    # data_loader_21k = torch.utils.data.DataLoader(
+    #     dataset_21k,
+    #     batch_size=args.batch_size,
+    #     sampler=train_21k_sampler,
+    #     num_workers=args.workers,
+    #     pin_memory=True,
+    #     collate_fn=collate_fn,
+    # )
+
     data_loader_test = torch.utils.data.DataLoader(
         dataset_test, batch_size=args.batch_size, sampler=test_sampler, num_workers=args.workers, pin_memory=True
     )
@@ -593,13 +608,13 @@ def main(args):
     # model_teacher = torchvision.models.efficientnet_v2_s(weights=weights)
 
     # ResNext101
-    weights = torchvision.models.ResNeXt101_64X4D_Weights.IMAGENET1K_V1
-    model_teacher = torchvision.models.resnext101_64x4d(weights=weights)
+    # weights = torchvision.models.ResNeXt101_64X4D_Weights.IMAGENET1K_V1
+    # model_teacher = torchvision.models.resnext101_64x4d(weights=weights)
 
     # PResNet101
-    # checkpoint = torch.load("./pretrained/ResNet101_vd_ssld_pretrained.pth")
-    # model_teacher = models.PResNet(depth=101, freeze_norm=True, pretrained=False)
-    # model_teacher.load_state_dict(checkpoint)
+    checkpoint = torch.load("./pretrained/ResNet101_vd_ssld_pretrained.pth")
+    model_teacher = models.PResNet(depth=101, pretrained=False)
+    model_teacher.load_state_dict(checkpoint)
 
     print("Creating model")
     if args.model not in models.__dict__.keys():
@@ -816,13 +831,20 @@ def main(args):
         #     fpn=args.fpn
         #     )
 
+        # # experiment: alternate 21k and 1k dataloader
+        # if epoch % 2 == 0:
+        #     dl = data_loader_21k
+        # else:
+        #     dl = data_loader
+
+        # # learn from an external teacher
         train_one_epoch_twobackward_external_teacher(
                 model_teacher,
                 model, 
                 criterion,
                 criterion_kd, 
                 optimizer, 
-                data_loader, 
+                data_loader,  # experiment 
                 device, epoch, 
                 args, 
                 model_ema, 
