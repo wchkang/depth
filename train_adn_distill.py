@@ -253,7 +253,7 @@ def train_one_epoch_twobackward_external_teacher(
             # forward pass for base_net
             outputs_skip = model(image, skip=skip_cfg_basenet)
 
-            T = subpath_temp_full_base * 2.0 # experiment: 2025.03.26
+            T = subpath_temp_full_base  # * 2.0 # experiment: 2025.03.26
 
             # orig #1: get softmax KD loss between the super and the base
             outputs_skip_topK = outputs_skip.gather(1, pred_full)
@@ -611,10 +611,14 @@ def main(args):
     # weights = torchvision.models.ResNeXt101_64X4D_Weights.IMAGENET1K_V1
     # model_teacher = torchvision.models.resnext101_64x4d(weights=weights)
 
+    # ConvNext_Large
+    weights = torchvision.models.ResNeXt101_64X4D_Weights.IMAGENET1K_V1
+    model_teacher = torchvision.models.convnext_large(weights=weights)
+
     # PResNet101
-    checkpoint = torch.load("./pretrained/ResNet101_vd_ssld_pretrained.pth")
-    model_teacher = models.PResNet(depth=101, pretrained=False)
-    model_teacher.load_state_dict(checkpoint)
+    # checkpoint = torch.load("./pretrained/ResNet101_vd_ssld_pretrained.pth")
+    # model_teacher = models.PResNet(depth=101, pretrained=False)
+    # model_teacher.load_state_dict(checkpoint)
 
     print("Creating model")
     if args.model not in models.__dict__.keys():
