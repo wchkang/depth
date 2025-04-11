@@ -5,11 +5,19 @@ import torch.nn.functional as F
 class JSD(nn.Module):
     def __init__(self):
         super(JSD, self).__init__()
-        self.kl_div = nn.KLDivLoss(reduction='batchmean')
+      
+    
+    def forward(self, logits_p, logits_q, eps=1e-8):
+        p = F.softmax(logits_p, dim=1).clamp(min=eps)
+        q = F.softmax(logits_q, dim=1).clamp(min=eps)
 
-    def forward(self, p, q):
-        p = F.softmax(p, dim=1)
-        q = F.softmax(q, dim=1)
         m = 0.5 * (p + q)
-        jsd = 0.5 * (self.kl_div(F.log_softmax(p, dim=1), m) + self.kl_div(F.log_softmax(q, dim=1), m))
+        log_m = torch.log(m)
+
+        kl_pm = F.kl_div(log_m, p, reduction='batchmean')
+        kl_qm = F.kl_div(log_m, q, reduction='batchmean')
+
+        jsd = 0.5 * (kl_pm + kl_qm)
+
         return jsd
+        

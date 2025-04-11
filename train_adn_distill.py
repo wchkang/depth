@@ -196,6 +196,7 @@ def train_one_epoch_twobackward_external_teacher(
     model, 
     criterion,
     criterion_kd, 
+    criterion_jsd, # experiment
     optimizer, 
     data_loader, 
     device, 
@@ -224,7 +225,7 @@ def train_one_epoch_twobackward_external_teacher(
 
         optimizer.zero_grad()
         with torch.cuda.amp.autocast(enabled=scaler is not None):
-            top_k = 100 # default: 500
+            top_k = 500 # default: 500
             # forward pass for the teacher
             with torch.no_grad():
                outputs_teacher = model_teacher(image) 
@@ -240,9 +241,14 @@ def train_one_epoch_twobackward_external_teacher(
          
             # get softmax KD loss between the teacher and the super
             outputs_full_topK = outputs_full.gather(1, pred_teacher) 
+            # orig KD
             loss_softmax_kd_teacher_full = criterion_kd(F.log_softmax(outputs_full_topK[:,0:top_k]/T, dim=1), F.softmax(outputs_teacher_topK[:,0:top_k].clone().detach()/T, dim=1)) * T*T
+            # experiment JSD #1 => seems not working
+            # loss_softmax_kd_teacher_full = criterion_jsd(outputs_full_topK[:,0:top_k], outputs_teacher_topK[:,0:top_k].clone().detach())
+            
+            loss_ce_full = criterion(outputs_full, target)
 
-            loss_full = alpha * loss_softmax_kd_teacher_full
+            loss_full = 0.7 * loss_softmax_kd_teacher_full + (1 - 0.7) * loss_ce_full
             
             with torch.cuda.amp.autocast(enabled=False):
                 if scaler is not None:
@@ -292,6 +298,7 @@ def train_one_epoch_twobackward_external_teacher(
         metric_logger.meters["loss_full"].update(loss_full.item(), n=batch_size)
         metric_logger.meters["loss_skip"].update(loss_skip.item(), n=batch_size)
         metric_logger.meters["loss_kd_teacher_full"].update(loss_softmax_kd_teacher_full.item(), n=batch_size)
+        metric_logger.meters["loss_ce_full"].update(loss_ce_full.item(), n=batch_size)
         metric_logger.meters["loss_kd_full_base"].update(loss_softmax_kd_full_base.item(), n=batch_size)
       
         metric_logger.meters["img/s"].update(batch_size / (time.time() - start_time))
@@ -553,8 +560,8 @@ def main(args):
     # train_dir = os.path.join("~/data/imagenet21k_resized/", "train_val_small_classes")
     # train_dir = os.path.join("~/data/imagenet21k_resized/", "train_val")
     # train_dir = os.path.join("/media/data/imagenet21k_resized/", "imagenet21k-1k-merged")
-    train_dir = os.path.join("/media/data/", "imagenet21k-1k-merged")
-    # train_dir = os.path.join("/media/data/ILSVRC2012/", "train")
+    # train_dir = os.path.join("/media/data/", "imagenet21k-1k-merged")
+    train_dir = os.path.join("/media/data/ILSVRC2012/", "train")
     val_dir = os.path.join("/media/data/ILSVRC2012/", "val")
     dataset, dataset_test, train_sampler, test_sampler = load_data(train_dir, val_dir, args)
 
@@ -677,7 +684,7 @@ def main(args):
     else:
         criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
         criterion_kd = nn.KLDivLoss(reduction='batchmean')
-        # criterion_kd = JSD()
+        criterion_jsd = JSD()
     
     custom_keys_weight_decay = []
     if args.bias_weight_decay is not None:
@@ -847,6 +854,7 @@ def main(args):
                 model, 
                 criterion,
                 criterion_kd, 
+                criterion_jsd, # experiment
                 optimizer, 
                 data_loader,  # experiment 
                 device, epoch, 
