@@ -628,10 +628,14 @@ def main(args):
     # weights = torchvision.models.ResNeXt101_64X4D_Weights.IMAGENET1K_V1
     # model_teacher = torchvision.models.resnext101_64x4d(weights=weights)
 
+    # ConvNext_Large
+    weights = torchvision.models.ResNeXt101_64X4D_Weights.IMAGENET1K_V1
+    model_teacher = torchvision.models.convnext_large(weights=weights)
+
     # PResNet101
-    checkpoint = torch.load("./pretrained/ResNet101_vd_ssld_pretrained.pth")
-    model_teacher = models.PResNet(depth=101, pretrained=False)
-    model_teacher.load_state_dict(checkpoint)
+    # checkpoint = torch.load("./pretrained/ResNet101_vd_ssld_pretrained.pth")
+    # model_teacher = models.PResNet(depth=101, pretrained=False)
+    # model_teacher.load_state_dict(checkpoint)
 
     print("Creating model")
     if args.model not in models.__dict__.keys():
