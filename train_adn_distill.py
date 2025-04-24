@@ -237,7 +237,7 @@ def train_one_epoch_twobackward_external_teacher(
 
             # loss_full= criterion(outputs_full, target)
             
-            T = subpath_temp_teacher_full * 2.0 # experiment: 2025.04.20
+            T = subpath_temp_teacher_full * 4.0 # experiment: 2025.04.24
          
             # get softmax KD loss between the teacher and the super
             outputs_full_topK = outputs_full.gather(1, pred_teacher) 
@@ -246,13 +246,12 @@ def train_one_epoch_twobackward_external_teacher(
             # experiment JSD #1 => seems not working
             # loss_softmax_kd_teacher_full = criterion_jsd(outputs_full_topK[:,0:top_k], outputs_teacher_topK[:,0:top_k].clone().detach())
             
-
             # original
-            loss_full = alpha * loss_softmax_kd_teacher_full 
+            # loss_full = alpha * loss_softmax_kd_teacher_full 
 
             # exp: mix ce and kd
-            # loss_ce_full = criterion(outputs_full, target)
-            # loss_full = 0.9 * loss_softmax_kd_teacher_full + (1 - 0.9) * loss_ce_full
+            loss_ce_full = criterion(outputs_full, target)
+            loss_full = 0.7 * loss_softmax_kd_teacher_full + (1 - 0.7) * loss_ce_full
             
             with torch.cuda.amp.autocast(enabled=False):
                 if scaler is not None:
@@ -302,7 +301,7 @@ def train_one_epoch_twobackward_external_teacher(
         metric_logger.meters["loss_full"].update(loss_full.item(), n=batch_size)
         metric_logger.meters["loss_skip"].update(loss_skip.item(), n=batch_size)
         metric_logger.meters["loss_kd_teacher_full"].update(loss_softmax_kd_teacher_full.item(), n=batch_size)
-        # metric_logger.meters["loss_ce_full"].update(loss_ce_full.item(), n=batch_size)
+        metric_logger.meters["loss_ce_full"].update(loss_ce_full.item(), n=batch_size)
         metric_logger.meters["loss_kd_full_base"].update(loss_softmax_kd_full_base.item(), n=batch_size)
       
         metric_logger.meters["img/s"].update(batch_size / (time.time() - start_time))
@@ -618,24 +617,27 @@ def main(args):
     # weights = torchvision.models.EfficientNet_V2_S_Weights
     # model_teacher = torchvision.models.efficientnet_v2_s(weights=weights)
 
-    # ConvNext_Large
-    # weights = torchvision.models.ConvNeXt_Large_Weights.IMAGENET1K_V1
-    # model_teacher = torchvision.models.convnext_large(weights=weights)
-    # weights = torchvision.models.ConvNeXt_Base_Weights.IMAGENET1K_V1
-    # model_teacher = torchvision.models.convnext_base(weights=weights)
-
     # ResNext101
     # weights = torchvision.models.ResNeXt101_64X4D_Weights.IMAGENET1K_V1
     # model_teacher = torchvision.models.resnext101_64x4d(weights=weights)
+    # print("ResNext101")
 
     # ConvNext_Large
-    weights = torchvision.models.ResNeXt101_64X4D_Weights.IMAGENET1K_V1
-    model_teacher = torchvision.models.convnext_large(weights=weights)
+    # weights = torchvision.models.ResNeXt101_64X4D_Weights.IMAGENET1K_V1
+    # model_teacher = torchvision.models.convnext_large(weights=weights)
+    # print("ConvNext_Large")
+
+    # ConvNext_Base
+    # weights = torchvision.models.ConvNeXt_Base_Weights.IMAGENET1K_V1
+    # model_teacher = torchvision.models.convnext_base(weights=weights)
+    # print(ConvNext_Base)
+
 
     # PResNet101
-    # checkpoint = torch.load("./pretrained/ResNet101_vd_ssld_pretrained.pth")
-    # model_teacher = models.PResNet(depth=101, pretrained=False)
-    # model_teacher.load_state_dict(checkpoint)
+    checkpoint = torch.load("./pretrained/ResNet101_vd_ssld_pretrained.pth")
+    model_teacher = models.PResNet(depth=101, pretrained=False)
+    model_teacher.load_state_dict(checkpoint)
+    print("PResNet101")
 
     print("Creating model")
     if args.model not in models.__dict__.keys():
