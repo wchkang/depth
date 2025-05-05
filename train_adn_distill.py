@@ -248,12 +248,12 @@ def train_one_epoch_twobackward_external_teacher(
             # loss_softmax_kd_teacher_full = criterion_jsd(outputs_full_topK[:,0:top_k], outputs_teacher_topK[:,0:top_k].clone().detach())
             
             # original
-            loss_full = alpha * loss_softmax_kd_teacher_full 
+            # loss_full = alpha * loss_softmax_kd_teacher_full 
 
             # exp: mix ce and kd
-            # kd_ce_alpha = 0.9
-            # loss_ce_full = criterion(outputs_full, target)
-            # loss_full = alpha * (kd_ce_alpha * loss_softmax_kd_teacher_full + (1 - kd_ce_alpha) * loss_ce_full)
+            kd_ce_alpha = 0.9
+            loss_ce_full = criterion(outputs_full, target)
+            loss_full = alpha * (kd_ce_alpha * loss_softmax_kd_teacher_full + (1 - kd_ce_alpha) * loss_ce_full)
             
             with torch.cuda.amp.autocast(enabled=False):
                 if scaler is not None:
@@ -303,7 +303,7 @@ def train_one_epoch_twobackward_external_teacher(
         metric_logger.meters["loss_full"].update(loss_full.item(), n=batch_size)
         metric_logger.meters["loss_skip"].update(loss_skip.item(), n=batch_size)
         metric_logger.meters["loss_kd_teacher_full"].update(loss_softmax_kd_teacher_full.item(), n=batch_size)
-        # metric_logger.meters["loss_ce_full"].update(loss_ce_full.item(), n=batch_size)
+        metric_logger.meters["loss_ce_full"].update(loss_ce_full.item(), n=batch_size)
         metric_logger.meters["loss_kd_full_base"].update(loss_softmax_kd_full_base.item(), n=batch_size)
       
         metric_logger.meters["img/s"].update(batch_size / (time.time() - start_time))
@@ -635,9 +635,17 @@ def main(args):
     # model_teacher = torchvision.models.convnext_base(weights=weights)
     # print(ConvNext_Base)
 
-    # Timm ResNext101
-    model_teacher = timm.create_model('resnext101_32x16d', pretrained=True)
-    print("timm ResNext101_32x16d")
+    # ResNext101
+    # this is imagenet-1k supervised training
+    # model_teacher = timm.create_model('resnext101_32x16d', pretrained=True)
+    print("ResNext101_32x16d")
+    # this is semi weakly supervised training. Acc 85.1%
+    
+    # swsl top1 83.34
+    # model_teacher = torch.hub.load('facebookresearch/semi-supervised-ImageNet1K-models', 'resnext101_32x16d_swsl')
+
+    # wsl top1 84.2
+    model_teacher = torch.hub.load('facebookresearch/WSL-Images', 'resnext101_32x16d_wsl')
 
     # PResNet101
     # checkpoint = torch.load("./pretrained/ResNet101_vd_ssld_pretrained.pth")
