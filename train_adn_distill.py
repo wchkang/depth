@@ -251,7 +251,8 @@ def train_one_epoch_twobackward_external_teacher(
             # loss_full = alpha * loss_softmax_kd_teacher_full 
 
             # exp: mix ce and kd
-            kd_ce_alpha = 0.9
+            # kd_ce_alpha = 0.9 # step 1 pretraining imagenet1k
+            kd_ce_alpha = 0.7 # step 3 finetuning imagenet1k
             loss_ce_full = criterion(outputs_full, target)
             loss_full = alpha * (kd_ce_alpha * loss_softmax_kd_teacher_full + (1 - kd_ce_alpha) * loss_ce_full)
             
@@ -638,14 +639,18 @@ def main(args):
     # ResNext101
     # this is imagenet-1k supervised training
     # model_teacher = timm.create_model('resnext101_32x16d', pretrained=True)
-    print("ResNext101_32x16d")
+    # print("ResNext101_32x16d")
     # this is semi weakly supervised training. Acc 85.1%
     
     # swsl top1 83.34
     # model_teacher = torch.hub.load('facebookresearch/semi-supervised-ImageNet1K-models', 'resnext101_32x16d_swsl')
 
-    # wsl top1 84.2
-    model_teacher = torch.hub.load('facebookresearch/WSL-Images', 'resnext101_32x16d_wsl')
+    # swsl top1 84.28
+    print("ResNext101_32x8d_swsl")
+    model_teacher = torch.hub.load('facebookresearch/semi-supervised-ImageNet1K-models', 'resnext101_32x8d_swsl')
+
+    # wsl top1 84.16
+    # model_teacher = torch.hub.load('facebookresearch/WSL-Images', 'resnext101_32x16d_wsl')
 
     # PResNet101
     # checkpoint = torch.load("./pretrained/ResNet101_vd_ssld_pretrained.pth")
