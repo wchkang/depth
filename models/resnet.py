@@ -304,4 +304,6 @@ def resnet50vd(*, weights = None, progress: bool = True, **kwargs: Any) -> ResNe
 def resnet101(*, weights = None, progress: bool = True, **kwargs: Any) -> ResNet:
     return _resnet(Bottleneck, [3, 4, 23, 3], weights, progress, **kwargs)
 
-
+def resnet101vd(*, weights = None, progress: bool = True, **kwargs: Any) -> ResNet:
+    kwargs['variant'] = 'd'
+    return _resnet(Bottleneck, [3, 4, 23, 3], weights, progress, **kwargs)
