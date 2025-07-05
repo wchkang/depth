@@ -27,11 +27,7 @@ import sys
 import models
 
 from utils_dist import get_dist_info, is_master, print_at_master
-from semantic.metrics import AccuracySemanticSoftmaxMet
-from semantic.semantic_loss import SemanticSoftmaxLoss, SemanticKDLoss
-from semantic.semantics import ImageNet21kSemanticSoftmax
 
-from utils_criterion import JSD
 
 def train_one_epoch_twobackward(
     model, 
@@ -191,13 +187,12 @@ def evaluate(model, criterion, data_loader, device, print_freq=100, log_suffix="
     return metric_logger.acc1.global_avg
 
 
-# original
+# distillation with external teacher
 def train_one_epoch_twobackward_external_teacher(
     model_teacher,
     model, 
     criterion,
     criterion_kd, 
-    criterion_jsd, # experiment
     optimizer, 
     data_loader, 
     device, 
@@ -208,8 +203,6 @@ def train_one_epoch_twobackward_external_teacher(
     skip_cfg_basenet=None,
     skip_cfg_supernet=None,
     subpath_alpha=0.5,
-    subpath_temp_teacher_full=1.0,
-    subpath_temp_full_base=1.0
     ):
     model_teacher.eval()
     model.train()
@@ -225,7 +218,7 @@ def train_one_epoch_twobackward_external_teacher(
         alpha = subpath_alpha
 
         optimizer.zero_grad()
-        with torch.cuda.amp.autocast(enabled=scaler is not None):
+        with torch.amp.autocast('cuda', enabled=scaler is not None):
             top_k = 500 # default: 500
             # forward pass for the teacher
             with torch.no_grad():
@@ -236,27 +229,25 @@ def train_one_epoch_twobackward_external_teacher(
             outputs_full = model(image, skip=skip_cfg_supernet)  # original         
             outputs_full_topK, pred_full = outputs_full.topk(top_k, 1, largest=True, sorted=True)
 
-            # loss_full= criterion(outputs_full, target)
-            
-            T = subpath_temp_teacher_full * 2.0 # experiment: 2025.04.24
+
+            T = 2.0 # KD temperature for teacher to full
          
-            # get softmax KD loss between the teacher and the super
+            # get softmax KD loss between the teacher and the full
             outputs_full_topK = outputs_full.gather(1, pred_teacher) 
-            # orig KD
             loss_softmax_kd_teacher_full = criterion_kd(F.log_softmax(outputs_full_topK[:,0:top_k]/T, dim=1), F.softmax(outputs_teacher_topK[:,0:top_k].clone().detach()/T, dim=1)) * T*T
-            # experiment JSD #1 => seems not working
-            # loss_softmax_kd_teacher_full = criterion_jsd(outputs_full_topK[:,0:top_k], outputs_teacher_topK[:,0:top_k].clone().detach())
             
-            # original
+            
+            # step 2: kd from teacher to full
             # loss_full = alpha * loss_softmax_kd_teacher_full 
 
-            # exp: mix ce and kd
-            # kd_ce_alpha = 0.9 # step 1 pretraining imagenet1k
-            kd_ce_alpha = 0.7 # step 3 finetuning imagenet1k
+            # step 1 & 3: mix ce and kd
+            kd_ce_alpha = 0.9 # step 1 pretraining imagenet1k
+            # kd_ce_alpha = 0.7 # step 3 finetuning imagenet1k # effective for resnet50vd
+            # kd_ce_alpha = 0.5 # step 3 finetuning imagenet1k # effective for resnet101vd
             loss_ce_full = criterion(outputs_full, target)
             loss_full = alpha * (kd_ce_alpha * loss_softmax_kd_teacher_full + (1 - kd_ce_alpha) * loss_ce_full)
             
-            with torch.cuda.amp.autocast(enabled=False):
+            with torch.amp.autocast('cuda', enabled=False):
                 if scaler is not None:
                     scaler.scale(loss_full).backward()
                 else:
@@ -265,17 +256,11 @@ def train_one_epoch_twobackward_external_teacher(
             # forward pass for base_net
             outputs_skip = model(image, skip=skip_cfg_basenet)
 
-            T = subpath_temp_full_base  * 2.0 # experiment: 2025.03.26
+            T = 2.0 # KD temperature for full to base 
 
             # orig #1: get softmax KD loss between the super and the base
             outputs_skip_topK = outputs_skip.gather(1, pred_full)
             loss_softmax_kd_full_base = criterion_kd(F.log_softmax(outputs_skip_topK[:,0:top_k]/T, dim=1), F.softmax(outputs_full_topK[:,0:top_k].clone().detach()/T, dim=1)) * T*T
-
-            # exp: get softmax KD loss between the teacher and the base
-            # outputs_skip_topK = outputs_skip.gather(1, pred_teacher)
-            # loss_softmax_kd_full_base = criterion_kd(F.log_softmax(outputs_skip_topK[:,0:500]/T, dim=1), F.softmax(outputs_teacher_topK[:,0:500].clone().detach()/T, dim=1)) * T*T
-
-            # final loss
             loss_skip = (1 - alpha) * loss_softmax_kd_full_base
 
         if scaler is not None:
@@ -311,119 +296,6 @@ def train_one_epoch_twobackward_external_teacher(
 
         sys.stdout.flush()
 
-# JSD 
-def train_one_epoch_twobackward_external_teacher_JSD(
-    model_teacher,
-    model, 
-    criterion,
-    criterion_kd, 
-    optimizer, 
-    data_loader, 
-    device, 
-    epoch, 
-    args, 
-    model_ema=None, 
-    scaler=None,
-    skip_cfg_basenet=None,
-    skip_cfg_supernet=None,
-    subpath_alpha=0.5,
-    subpath_temp_teacher_full=1.0,
-    subpath_temp_full_base=1.0
-    ):
-    model_teacher.eval()
-    model.train()
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    metric_logger.add_meter("lr", utils.SmoothedValue(window_size=1, fmt="{value}"))
-    metric_logger.add_meter("img/s", utils.SmoothedValue(window_size=10, fmt="{value}"))
-
-    header = f"Epoch: [{epoch}]"
-    for i, (image, target) in enumerate(metric_logger.log_every(data_loader, args.print_freq, header)):
-        start_time = time.time()
-        image, target = image.to(device), target.to(device)
-
-        alpha = subpath_alpha
-
-        optimizer.zero_grad()
-        with torch.cuda.amp.autocast(enabled=scaler is not None):
-            
-            # forward pass for the teacher
-            with torch.no_grad():
-               outputs_teacher = model_teacher(image) 
-            outputs_teacher_topK, pred_teacher = outputs_teacher.topk(500, 1, largest=True, sorted=True)
-            
-            # forward pass for super_net
-            outputs_full = model(image, skip=skip_cfg_supernet)  # original         
-            outputs_full_topK, pred_full = outputs_full.topk(500, 1, largest=True, sorted=True)
-
-            # loss_full= criterion(outputs_full, target)
-            
-            T = subpath_temp_teacher_full
-         
-            # get softmax KD loss between the teacher and the super
-            outputs_full_topK = outputs_full.gather(1, pred_teacher) 
-            # loss_softmax_kd_teacher_full = criterion_kd(F.log_softmax(outputs_full_topK[:,0:500]/T, dim=1), F.softmax(outputs_teacher_topK[:,0:500].clone().detach()/T, dim=1)) * T*T
-
-            loss_softmax_kd_teacher_full = criterion_kd(outputs_full_topK[:,0:500], outputs_teacher_topK[:,0:500].clone().detach()) 
-
-
-            loss_full = alpha * loss_softmax_kd_teacher_full
-            
-            with torch.cuda.amp.autocast(enabled=False):
-                if scaler is not None:
-                    scaler.scale(loss_full).backward()
-                else:
-                    loss_full.backward()
-            
-            # forward pass for base_net
-            outputs_skip = model(image, skip=skip_cfg_basenet)
-
-            T = subpath_temp_full_base
-
-            # orig #1: get softmax KD loss between the super and the base
-            outputs_skip_topK = outputs_skip.gather(1, pred_full)
-
-            # JSD           
-            loss_softmax_kd_full_base = criterion_kd(outputs_skip_topK[:,0:500], outputs_full_topK[:,0:500].clone().detach())
-
-            # exp: get softmax KD loss between the teacher and the base
-            # outputs_skip_topK = outputs_skip.gather(1, pred_teacher)
-            # loss_softmax_kd_full_base = criterion_kd(F.log_softmax(outputs_skip_topK[:,0:500]/T, dim=1), F.softmax(outputs_teacher_topK[:,0:500].clone().detach()/T, dim=1)) * T*T
-
-            # final loss
-            loss_skip = (1 - alpha) * loss_softmax_kd_full_base
-
-        if scaler is not None:
-            scaler.scale(loss_skip).backward()
-            if args.clip_grad_norm is not None:
-                # we should unscale the gradients of optimizer's assigned params if do gradient clipping
-                scaler.unscale_(optimizer)
-                nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss_skip.backward()
-            if args.clip_grad_norm is not None:
-                nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
-            optimizer.step()
-
-        if model_ema and i % args.model_ema_steps == 0:
-            model_ema.update_parameters(model)
-            if epoch < args.lr_warmup_epochs:
-                # Reset ema buffer to keep copying weights during warmup period
-                model_ema.n_averaged.fill_(0)
-
-        # acc1, acc5 = utils.accuracy(outputs_full, target, topk=(1, 5))
-        batch_size = image.shape[0]
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-        metric_logger.meters["loss_full"].update(loss_full.item(), n=batch_size)
-        metric_logger.meters["loss_skip"].update(loss_skip.item(), n=batch_size)
-        metric_logger.meters["loss_kd_teacher_full"].update(loss_softmax_kd_teacher_full.item(), n=batch_size)
-        metric_logger.meters["loss_kd_full_base"].update(loss_softmax_kd_full_base.item(), n=batch_size)
-      
-        metric_logger.meters["img/s"].update(batch_size / (time.time() - start_time))
-
-        sys.stdout.flush()
-
 
 def _get_cache_path(filepath):
     import hashlib
@@ -450,7 +322,7 @@ def load_data(traindir, valdir, args):
     if args.cache_dataset and os.path.exists(cache_path):
         # Attention, as the transforms are also cached!
         print(f"Loading dataset_train from {cache_path}")
-        dataset, _ = torch.load(cache_path)
+        dataset, _ = torch.load(cache_path, weights_only=False)
     else:
         auto_augment_policy = getattr(args, "auto_augment", None)
         random_erase_prob = getattr(args, "random_erase", 0.0)
@@ -478,7 +350,7 @@ def load_data(traindir, valdir, args):
     if args.cache_dataset and os.path.exists(cache_path):
         # Attention, as the transforms are also cached!
         print(f"Loading dataset_test from {cache_path}")
-        dataset_test, _ = torch.load(cache_path)
+        dataset_test, _ = torch.load(cache_path, weights_only=False)
     else:
         preprocessing = presets.ClassificationPresetEval(
             crop_size=val_crop_size, resize_size=val_resize_size, interpolation=interpolation
@@ -527,8 +399,7 @@ def load_model_weights(model, model_path, freeze_bn=False):
     if freeze_bn:
         print("freeze norm")
         model = freeze_norm(model)
-    state = torch.load(model_path, map_location='cpu')
-    # print(state.keys())
+    state = torch.load(model_path, map_location='cpu', weights_only=False)
     for key in model.state_dict():
         if 'num_batches_tracked' in key:
             print('skipping num_batches_tracked')
@@ -562,19 +433,13 @@ def main(args):
     else:
         torch.backends.cudnn.benchmark = True
 
-    # exp: distill using imagenet21k and evalute using imagenet1k
-    # train_dir = os.path.join("~/data/imagenet21k_resized/", "train_val_small_classes")
-    # train_dir = os.path.join("~/data/imagenet21k_resized/", "train_val")
-    # train_dir = os.path.join("/media/data/imagenet21k_resized/", "imagenet21k-1k-merged")
-    # train_dir = os.path.join("/media/data/", "imagenet21k-1k-merged")
-    # train_dir = os.path.join("~/data/imagenet21k_resized/", "imagenet21k-1k-merged")
-    train_dir = os.path.join("/media/data/ILSVRC2012/", "train")
+    if args.imagenet21k:
+        train_dir = os.path.join("~/data/imagenet21k_resized/", "imagenet21k-1k-merged")
+    else:
+        train_dir = os.path.join("/media/data/ILSVRC2012/", "train")
     val_dir = os.path.join("/media/data/ILSVRC2012/", "val")
     dataset, dataset_test, train_sampler, test_sampler = load_data(train_dir, val_dir, args)
 
-    # experimetn to use both 1k and 21k alternatively
-    # dataset_21k, _, train_21k_sampler, _ = load_data(train_dir_21k, val_dir, args)
-    
     collate_fn = None
     num_classes = len(dataset.classes)
     mixup_transforms = []
@@ -588,10 +453,6 @@ def main(args):
         def collate_fn(batch):
             return mixupcutmix(*default_collate(batch))
         
-    # print("dataset test")
-    # print(dataset[11000][0].shape)
-    # print(dataset[11000][1])
-
     data_loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -601,74 +462,38 @@ def main(args):
         collate_fn=collate_fn,
     )
 
-    # experiment to use both 21k and 1k 
-    # data_loader_21k = torch.utils.data.DataLoader(
-    #     dataset_21k,
-    #     batch_size=args.batch_size,
-    #     sampler=train_21k_sampler,
-    #     num_workers=args.workers,
-    #     pin_memory=True,
-    #     collate_fn=collate_fn,
-    # )
-
     data_loader_test = torch.utils.data.DataLoader(
         dataset_test, batch_size=args.batch_size, sampler=test_sampler, num_workers=args.workers, pin_memory=True
     )
 
-    print("Creating teacher")
-    # weights = torchvision.models.ResNet101_Weights.IMAGENET1K_V2
-    # model_teacher = torchvision.models.resnet101(weights=weights)
-    # weights = torchvision.models.EfficientNet_V2_S_Weights
-    # model_teacher = torchvision.models.efficientnet_v2_s(weights=weights)
+    if args.distillation:
+        print("Creating a teacher for distillation:")
+        # Ref: Billion-scale semi-supervised learning for image classification,’ Zeki  et al., 2019
+        print("ResNext101_32x8d_swsl with 84.28% top1 accuracy")
+        model_teacher = torch.hub.load('facebookresearch/semi-supervised-ImageNet1K-models', 'resnext101_32x8d_swsl')
 
-    # ResNext101
-    # weights = torchvision.models.ResNeXt101_64X4D_Weights.IMAGENET1K_V1
-    # model_teacher = torchvision.models.resnext101_64x4d(weights=weights)
-    # print("ResNext101")
+        # Ref: Exploring the limits of weakly supervised pretraining,’ Mahajan et al., ECCV 2018
+        # print("ResNext101_32x16d_wsl with 84.16% top1 accuracy")
+        # model_teacher = torch.hub.load('facebookresearch/WSL-Images', 'resnext101_32x16d_wsl')
 
-    # ConvNext_Large
-    # weights = torchvision.models.ConvNeXt_Large_Weights.IMAGENET1K_V1
-    # model_teacher = torchvision.models.convnext_large(weights=weights)
-    # print("ConvNext_Large")
+        # PResNet101
+        # checkpoint = torch.load("./pretrained/ResNet101_vd_ssld_pretrained.pth")
+        # model_teacher = models.PResNet(depth=101, pretrained=False)
+        # model_teacher.load_state_dict(checkpoint)
+        # print("PResNet101")
+        
+        model_teacher.to(device)
 
-    # ConvNext_Base
-    # weights = torchvision.models.ConvNeXt_Base_Weights.IMAGENET1K_V1
-    # model_teacher = torchvision.models.convnext_base(weights=weights)
-    # print(ConvNext_Base)
-
-    # ResNext101
-    # this is imagenet-1k supervised training
-    # model_teacher = timm.create_model('resnext101_32x16d', pretrained=True)
-    # print("ResNext101_32x16d")
-    # this is semi weakly supervised training. Acc 85.1%
-    
-    # swsl top1 83.34
-    # model_teacher = torch.hub.load('facebookresearch/semi-supervised-ImageNet1K-models', 'resnext101_32x16d_swsl')
-
-    # swsl top1 84.28
-    print("ResNext101_32x8d_swsl")
-    model_teacher = torch.hub.load('facebookresearch/semi-supervised-ImageNet1K-models', 'resnext101_32x8d_swsl')
-
-    # wsl top1 84.16
-    # model_teacher = torch.hub.load('facebookresearch/WSL-Images', 'resnext101_32x16d_wsl')
-
-    # PResNet101
-    # checkpoint = torch.load("./pretrained/ResNet101_vd_ssld_pretrained.pth")
-    # model_teacher = models.PResNet(depth=101, pretrained=False)
-    # model_teacher.load_state_dict(checkpoint)
-    # print("PResNet101")
-
+        if torch.__version__ >= "2.0" and args.compile:
+            # Note: torch.compile is not supported for DDP models, so we compile it before wrapping in DDP
+            model_teacher = torch.compile(model_teacher)
+        
     print("Creating model")
     if args.model not in models.__dict__.keys():
         print(f"{args.model} is not supported")
         sys.exit()
     
-    if args.imagenet21k:
-        num_classes =  10450 # fall11 11221
-    else:
-        num_classes = 1000
-
-    model = models.__dict__[args.model](num_classes=num_classes)
+    model = models.__dict__[args.model](num_classes=1000)
 
     if args.fpn:
         if args.model.startswith("resnet"):
@@ -684,10 +509,9 @@ def main(args):
         model_without_ddp = model
     
     if args.weights and args.test_only:
-        checkpoint = torch.load(args.weights, map_location="cpu")
+        checkpoint = torch.load(args.weights, map_location="cpu", weights_only=False)
         model_without_ddp.load_state_dict(checkpoint)
     
-    # if args.imagenet21k and args.weights:
     if args.weights:
         print("Loading weights: ", args.weights)
         load_model_weights(model_without_ddp, args.weights, freeze_bn=False)
@@ -695,27 +519,12 @@ def main(args):
     if args.distributed and args.sync_bn:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
 
-    if args.imagenet21k and args.freeze_params:
-        print("Freeze parameters.")
-        freeze_parameters(model)
-        freeze_norm(model)
-        for param in model.fc.parameters():
-            param.requires_grad = True
-
-    model_teacher.to(device)
     model.to(device)
+    if args.compile:
+        model = torch.compile(model)
 
-    # semantic
-    semantic_softmax_processor = ImageNet21kSemanticSoftmax(args)
-    semantic_met = AccuracySemanticSoftmaxMet(semantic_softmax_processor)
-
-    if args.imagenet21k:
-        criterion = SemanticSoftmaxLoss(semantic_softmax_processor)
-        criterion_kd = SemanticKDLoss(semantic_softmax_processor)
-    else:
-        criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
-        criterion_kd = nn.KLDivLoss(reduction='batchmean')
-        criterion_jsd = JSD()
+    criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+    criterion_kd = nn.KLDivLoss(reduction='batchmean')
     
     custom_keys_weight_decay = []
     if args.bias_weight_decay is not None:
@@ -748,7 +557,7 @@ def main(args):
     else:
         raise RuntimeError(f"Invalid optimizer {args.opt}. Only SGD, RMSprop and AdamW are supported.")
 
-    scaler = torch.cuda.amp.GradScaler() if args.amp else None
+    scaler = torch.amp.GradScaler('cuda') if args.amp else None
 
     args.lr_scheduler = args.lr_scheduler.lower()
     if args.lr_scheduler == "steplr":
@@ -787,7 +596,8 @@ def main(args):
         lr_scheduler = main_lr_scheduler
 
     if args.distributed:
-        model_teacher = torch.nn.parallel.DistributedDataParallel(model_teacher, device_ids=[args.gpu], find_unused_parameters=True)
+        if args.distillation:
+            model_teacher = torch.nn.parallel.DistributedDataParallel(model_teacher, device_ids=[args.gpu], find_unused_parameters=True)
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
         if args.fpn:
             model_without_ddp = model.module.model
@@ -808,7 +618,7 @@ def main(args):
         model_ema = utils.ExponentialMovingAverage(model_without_ddp, device=device, decay=1.0 - alpha)
 
     if args.resume:
-        checkpoint = torch.load(args.resume, map_location="cpu")
+        checkpoint = torch.load(args.resume, map_location="cpu", weights_only=False)
         model_without_ddp.load_state_dict(checkpoint["model"])
         if not args.test_only:
             optimizer.load_state_dict(checkpoint["optimizer"])
@@ -818,7 +628,6 @@ def main(args):
             model_ema.load_state_dict(checkpoint["model_ema"])
         if scaler:
             scaler.load_state_dict(checkpoint["scaler"])
-
      
     if args.test_only:
         # We disable the cudnn benchmarking because it can noticeably affect the accuracy
@@ -830,19 +639,11 @@ def main(args):
             print(f"Error: {args.model} has {model_without_ddp.num_skippable_stages} skippable stages!")
             return
 
-        if args.imagenet21k:
-            # if model_ema:
-            #     evaluate_imagenet21k(model_ema, criterion, data_loader_test, device=device, skip=skip_cfg, met=semantic_met)
-            # else:
-            #     evaluate_imagenet21k(model, criterion, data_loader_test, device=device, skip=skip_cfg, met=semantic_met)
-            return
-    
+        if model_ema:
+            evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", skip=skip_cfg, fpn=False)
         else:
-            if model_ema:
-                evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", skip=skip_cfg, fpn=False)
-            else:
-                evaluate(model, criterion, data_loader_test, device=device, skip=skip_cfg, fpn=args.fpn)
-            return
+            evaluate(model, criterion, data_loader_test, device=device, skip=skip_cfg, fpn=args.fpn)
+        return
     
     num_skippable_stages = model_without_ddp.num_skippable_stages
 
@@ -855,37 +656,13 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
-        
-        # train_one_epoch_twobackward(
-        #     model, 
-        #     criterion, 
-        #     criterion_kd, 
-        #     optimizer, 
-        #     data_loader, 
-        #     device, epoch, 
-        #     args, 
-        #     model_ema, 
-        #     scaler, 
-        #     skip_cfg_basenet, 
-        #     skip_cfg_supernet, 
-        #     subpath_alpha=args.subpath_alpha, 
-        #     subpath_temp=args.subpath_temp,
-        #     fpn=args.fpn
-        #     )
 
-        # # experiment: alternate 21k and 1k dataloader
-        # if epoch % 2 == 0:
-        #     dl = data_loader_21k
-        # else:
-        #     dl = data_loader
-
-        # # learn from an external teacher
-        train_one_epoch_twobackward_external_teacher(
+        if args.distillation:        
+            train_one_epoch_twobackward_external_teacher(
                 model_teacher,
                 model, 
                 criterion,
                 criterion_kd, 
-                criterion_jsd, # experiment
                 optimizer, 
                 data_loader,  # experiment 
                 device, epoch, 
@@ -895,20 +672,27 @@ def main(args):
                 skip_cfg_basenet, 
                 skip_cfg_supernet, 
                 subpath_alpha=args.subpath_alpha, 
-                subpath_temp_teacher_full=1.0,
-                subpath_temp_full_base=1.0,
-        )
-            
+            )
+        else:
+            train_one_epoch_twobackward(
+                model, 
+                criterion, 
+                criterion_kd, 
+                optimizer, 
+                data_loader, 
+                device, epoch, 
+                args, 
+                model_ema, 
+                scaler, 
+                skip_cfg_basenet, 
+                skip_cfg_supernet, 
+                subpath_alpha=args.subpath_alpha, 
+                subpath_temp=args.subpath_temp,
+                fpn=args.fpn
+            )
+
         lr_scheduler.step()
 
-        # if args.imagenet21k:
-        #     if model_ema:
-        #         evaluate_imagenet21k(model_ema, criterion, data_loader_test, device=device, skip=skip_cfg_basenet, met=semantic_met)
-        #         evaluate_imagenet21k(model_ema, criterion, data_loader_test, device=device, skip=skip_cfg_supernet, met=semantic_met)
-        #     else:
-        #         evaluate_imagenet21k(model, criterion, data_loader_test, device=device, skip=skip_cfg_basenet, met=semantic_met)
-        #         evaluate_imagenet21k(model, criterion, data_loader_test, device=device, skip=skip_cfg_supernet, met=semantic_met)    
-        # else:
         if model_ema:
             evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", skip=skip_cfg_basenet, fpn=False)
             evaluate(model_ema, criterion, data_loader_test, device=device, log_suffix="EMA", skip=skip_cfg_supernet, fpn=False)
@@ -941,6 +725,8 @@ def get_args_parser(add_help=True):
     import argparse
 
     parser = argparse.ArgumentParser(description="PyTorch Classification Training", add_help=add_help)
+
+    parser.add_argument("--distillation", action="store_true", help="use distillation from a teacher model")
 
     parser.add_argument("--subpath-alpha", default=0.5, type=float, help="sub-paths distillation alpha (default: 0.5)")
     parser.add_argument("--subpath-temp", default=1.0, type=float, help="sub-paths distillation temperature (default: 1.0)")
@@ -1027,16 +813,14 @@ def get_args_parser(add_help=True):
     parser.add_argument("--augmix-severity", default=3, type=int, help="severity of augmix policy")
     parser.add_argument("--random-erase", default=0.0, type=float, help="random erasing probability (default: 0.0)")
 
-    # ImageNet21K pretraining
-    parser.add_argument("--imagenet21k", action="store_true", help="pretrain with imagenet21k")
-    parser.add_argument("--tree_path", default='./resources/imagenet21k_miil_tree.pth', type=str)
-    parser.add_argument("--freeze_params", action="store_true", help="freeze parameters and norms except the head")
+    parser.add_argument("--imagenet21k", action="store_true", help="Use ImageNet21K dataset for training")
 
     # FPN: only support ResNet
     parser.add_argument("--fpn", action="store_true", help="Use FPN in backbone")
 
     # Mixed precision training parameters
     parser.add_argument("--amp", action="store_true", help="Use torch.cuda.amp for mixed precision training")
+    parser.add_argument("--compile", action="store_true", help="Use torch.compile for model compilation")
 
     # distributed training parameters
     parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")

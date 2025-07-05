@@ -4,6 +4,7 @@ pretrained*/
 resources/
 logs/
 exp*/
+obsolete/
 exp-*.ipynb
 __pycache__/
 *.swp

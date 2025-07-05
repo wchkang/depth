@@ -415,7 +415,7 @@ def load_data(traindir, valdir, args):
     if args.cache_dataset and os.path.exists(cache_path):
         # Attention, as the transforms are also cached!
         print(f"Loading dataset_train from {cache_path}")
-        dataset, _ = torch.load(cache_path)
+        dataset, _ = torch.load(cache_path, weights_only=False)
     else:
         auto_augment_policy = getattr(args, "auto_augment", None)
         random_erase_prob = getattr(args, "random_erase", 0.0)
@@ -443,7 +443,7 @@ def load_data(traindir, valdir, args):
     if args.cache_dataset and os.path.exists(cache_path):
         # Attention, as the transforms are also cached!
         print(f"Loading dataset_test from {cache_path}")
-        dataset_test, _ = torch.load(cache_path)
+        dataset_test, _ = torch.load(cache_path, weights_only=False)
     else:
         preprocessing = presets.ClassificationPresetEval(
             crop_size=val_crop_size, resize_size=val_resize_size, interpolation=interpolation
@@ -473,7 +473,7 @@ def load_data(traindir, valdir, args):
 
 
 def load_model_weights(model, model_path):
-    state = torch.load(model_path, map_location='cpu')
+    state = torch.load(model_path, map_location='cpu', weights_only=False)
     # print(state.keys())
     for key in model.state_dict():
         if 'num_batches_tracked' in key:
@@ -584,7 +584,7 @@ def main(args):
     print(model)
     
     if args.weights and args.test_only:
-        checkpoint = torch.load(args.weights, map_location="cpu")
+        checkpoint = torch.load(args.weights, map_location="cpu", weights_only=False)
         model_without_ddp.load_state_dict(checkpoint)
     
     if args.imagenet21k and args.weights:
@@ -604,8 +604,8 @@ def main(args):
 
 
     # semantic
-    semantic_softmax_processor = ImageNet21kSemanticSoftmax(args)
-    semantic_met = AccuracySemanticSoftmaxMet(semantic_softmax_processor)
+    #semantic_softmax_processor = ImageNet21kSemanticSoftmax(args)
+    #semantic_met = AccuracySemanticSoftmaxMet(semantic_softmax_processor)
 
     if args.imagenet21k:
         criterion = SemanticSoftmaxLoss(semantic_softmax_processor)
@@ -705,7 +705,7 @@ def main(args):
         model_ema = utils.ExponentialMovingAverage(model_without_ddp, device=device, decay=1.0 - alpha)
 
     if args.resume:
-        checkpoint = torch.load(args.resume, map_location="cpu")
+        checkpoint = torch.load(args.resume, map_location="cpu", weights_only=False)
         model_without_ddp.load_state_dict(checkpoint["model"])
         if not args.test_only:
             optimizer.load_state_dict(checkpoint["optimizer"])
@@ -745,6 +745,10 @@ def main(args):
 
     skip_cfg_basenet = [True for _ in range(num_skippable_stages)]
     skip_cfg_supernet = [False for _ in range(num_skippable_stages)]
+
+
+    if torch.__version__ >= "2.0" and args.torch_compile:
+        model = torch.compile(model)
 
     print("Start training")
     start_time = time.time()
@@ -944,6 +948,9 @@ def get_args_parser(add_help=True):
     # Mixed precision training parameters
     parser.add_argument("--amp", action="store_true", help="Use torch.cuda.amp for mixed precision training")
 
+    # Torch compile
+    parser.add_argument("--torch-compile", action="store_true", help="Use torch.compile for model compilation")
+    
     # distributed training parameters
     parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
     parser.add_argument("--dist-url", default="env://", type=str, help="url used to set up distributed training")
